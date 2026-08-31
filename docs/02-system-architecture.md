@@ -2,7 +2,41 @@
 
 ## Goal
 
-Define a media architecture that keeps latency predictable, isolates failures, and remains simple enough to deploy on a touring Windows machine.
+Define a media architecture that keeps latency predictable, isolates failures, and avoids opening unnecessary RTSP sessions against the fixture cameras.
+
+A critical requirement is that **each configured physical camera is ingested and decoded only once by RoboCam-Hub**, regardless of how many Views, previews or NDI Outputs use that source.
+
+The camera feeds have limited practical client capacity. RoboCam-Hub must therefore treat the camera connection as a scarce resource and fan decoded frames out internally rather than reconnecting to the camera for each consumer.
+
+## Fundamental single-ingest rule
+
+For each configured camera:
+
+```text
+Physical Camera
+      ↓
+ONE RTSP session
+      ↓
+ONE decode pipeline
+      ↓
+Latest decoded frame state
+      ↓
+Internal fan-out
+├─ View A
+├─ View B
+├─ View C
+├─ Local preview
+├─ Fullscreen monitoring
+└─ NDI Outputs through their referenced Views
+```
+
+If `SR Followspot` appears in three Views and those Views feed two NDI Outputs, RoboCam-Hub still opens only **one RTSP connection and one decoder** for `SR Followspot`.
+
+Views reference logical camera sources. They never create their own camera ingest pipelines.
+
+NDI Outputs reference Views. They never create camera ingest pipelines either.
+
+The local UI preview also consumes the already-decoded internal frame state and must never reconnect to the physical camera simply to display a preview.
 
 ## High-level architecture
 
@@ -13,27 +47,27 @@ Camera NIC / VLAN → │ Camera Discovery     │
                                │
                                ↓
 ┌──────────────┐     ┌──────────────────────┐
-│ RTSP Camera 1│ ──→ │ Ingest Pipeline 1    │ ──┐
+│ RTSP Camera 1│ ──→ │ Ingest+Decode Pipe 1 │ ──┐
 ├──────────────┤     ├──────────────────────┤   │
-│ RTSP Camera 2│ ──→ │ Ingest Pipeline 2    │ ──┤
+│ RTSP Camera 2│ ──→ │ Ingest+Decode Pipe 2 │ ──┤
 ├──────────────┤     ├──────────────────────┤   │
-│ RTSP Camera N│ ──→ │ Ingest Pipeline N    │ ──┘
+│ RTSP Camera N│ ──→ │ Ingest+Decode Pipe N │ ──┘
 └──────────────┘     └──────────┬───────────┘
-                               │ decoded frames
+                               │ one decoded latest-frame source per camera
                                ↓
                     ┌──────────────────────┐
                     │ Frame Router / State │
                     └──────────┬───────────┘
-                               │
+                               │ internal references / GPU surfaces
                                ↓
                     ┌──────────────────────┐
-                    │ Multiview Compositor │
+                    │ View Compositor(s)   │
                     └──────────┬───────────┘
-                               │
+                               │ clean composed View frames
                      ┌─────────┴─────────┐
                      ↓                   ↓
             ┌────────────────┐  ┌────────────────┐
-            │ Local Preview  │  │ NDI Sender     │
+            │ Local Preview  │  │ NDI Sender(s)  │
             └────────────────┘  └───────┬────────┘
                                         │
                                         ↓
@@ -54,7 +88,7 @@ The application should control GStreamer through an embedded integration rather 
 
 ## Per-camera pipeline isolation
 
-Each camera should have its own independently managed ingest pipeline.
+Each physical camera has exactly one independently managed ingest/decode pipeline while configured and active.
 
 Reference low-latency behaviour:
 
@@ -69,9 +103,9 @@ rtph264depay
     ↓
 H.264 decoder
     ↓
-leaky one-frame queue
+leaky latest-frame boundary
     ↓
-frame router
+shared frame router
 ```
 
 Exact elements may change after profiling.
@@ -82,16 +116,40 @@ A blocked, disconnected or slow camera must never cause the compositor to wait i
 
 The compositor should work with the newest available frame from each source rather than enforcing broadcast-style frame synchronisation by default.
 
-## Frame freshness model
+### No duplicate consumer pipelines
 
-The application should attach internal metadata to each received frame or source state:
+The following operations must **not** create additional RTSP sessions or decoders for an already configured camera:
+
+- adding the same camera to another View;
+- displaying that camera in the current editor View;
+- entering Show Mode;
+- entering local fullscreen monitoring;
+- creating multiple NDI Outputs that ultimately use the same camera;
+- opening camera properties or diagnostics;
+- highlighting/locating a camera from the Camera Source Rail.
+
+All of these consume shared internal source state.
+
+## Frame router / shared source state
+
+The frame router is the boundary between camera ingest and every downstream consumer.
+
+For each logical source it should expose the latest complete decoded frame plus lightweight metadata such as:
 
 - source ID;
 - arrival timestamp;
 - source timestamp where useful;
 - frame sequence / counter;
 - freshness age;
-- decode state.
+- negotiated dimensions and frame rate;
+- decode state;
+- health state.
+
+The frame itself should be shared by reference or GPU-resource handle where practical rather than copied independently for every View.
+
+A downstream consumer may read the latest complete frame, but it does not own or control the camera pipeline.
+
+## Frame freshness model
 
 The compositor should prefer the newest completed frame available for each tile.
 
@@ -102,6 +160,23 @@ If no new frame is available, it should either:
 - show a placeholder when the source is lost.
 
 It should not delay healthy cameras waiting for a missing frame from another source.
+
+## Multiple Views
+
+Multiple Views may use the same camera concurrently.
+
+Example:
+
+```text
+SR Followspot ── ONE ingest/decode ── latest frame
+                                      ├─ View: Spots A
+                                      ├─ View: All Spots
+                                      └─ View: SR Fullscreen
+```
+
+The cost of another View is therefore composition/render work, **not another camera network stream or another H.264 decode**.
+
+This is an architectural invariant, not merely an optimisation.
 
 ## Compositor
 
@@ -114,11 +189,15 @@ The compositor is responsible for:
 - missing-source overlays;
 - output frame generation.
 
+The compositor consumes already-decoded source frames from the frame router.
+
+It must never pull RTSP directly from a camera.
+
 The compositor should initially prioritise low latency over broadcast-perfect frame synchronisation.
 
 Potential implementation approaches should be benchmarked before final selection:
 
-1. GStreamer compositor elements.
+1. GStreamer compositor elements operating on the shared decoded source path.
 2. GPU-backed custom composition.
 3. Application rendering layer feeding an NDI frame buffer.
 
@@ -128,10 +207,14 @@ The chosen approach must avoid unnecessary CPU↔GPU copies.
 
 The first implementation target is NDI High Bandwidth.
 
-The NDI sender should receive frames directly from the compositor rather than capturing the application's preview window.
+The NDI sender receives clean composed View frames directly from the compositor rather than capturing the application's preview window.
+
+NDI never reads RTSP directly and never owns a camera decoder.
 
 This avoids:
 
+- duplicate camera sessions;
+- duplicate H.264 decoding;
 - desktop capture latency;
 - extra render stages;
 - accidental UI overlays;
@@ -139,21 +222,36 @@ This avoids:
 
 ## Local preview
 
-The local application preview and NDI output should consume the same compositor result or equivalent frame state.
+The local application preview consumes the same composed View result or the same shared internal source/frame state as NDI composition.
+
+It must not create its own RTSP connection to any configured camera.
 
 The preview must not be allowed to back-pressure the media pipeline. If the UI cannot render fast enough, preview frames should be dropped.
 
+## Discovery preview
+
+Camera discovery is the one workflow where RoboCam-Hub may temporarily open a preview stream before the camera has been added to the Show.
+
+Rules:
+
+- only one discovery preview is active at a time by default;
+- once a discovered camera is added, normal operation should transition to the single configured ingest/decode pipeline;
+- the discovery preview must be closed or cleanly handed over so the application does not leave both a temporary and configured RTSP connection open;
+- selecting an already configured camera for identification must reuse its existing decoded frame rather than opening another session.
+
+This is particularly important because the camera may already be serving another required client such as the RoboSpot BaseStation.
+
 ## Network separation
 
-The application must expose explicit adapter selection for:
+The application must expose explicit adapter selection for camera ingest and NDI output.
 
 ### Camera network adapter
 
 Used for:
 
-- RTSP / RTP traffic;
+- the single RTSP / RTP session per configured camera;
 - camera discovery;
-- ONVIF or vendor-specific management where later supported.
+- read-only metadata access where supported.
 
 ### NDI network adapter
 
@@ -175,13 +273,14 @@ Desktop Application Process
   ├─ UI / application state
   ├─ show configuration service
   ├─ camera manager
-  ├─ media pipeline manager
-  ├─ compositor
+  │   └─ one ingest/decode instance per active camera
+  ├─ shared latest-frame router
+  ├─ View compositor(s)
   ├─ NDI output manager
   └─ diagnostics / telemetry
 ```
 
-If media stability requires stronger fault isolation later, camera pipelines could be moved into worker processes. This should not be done prematurely unless profiling or crash behaviour justifies it.
+If media stability requires stronger fault isolation later, camera pipelines could be moved into worker processes. The single-ingest invariant still applies even if process boundaries change.
 
 ## Threading model
 
@@ -189,36 +288,32 @@ The UI thread must never perform blocking media or network work.
 
 Camera ingest, decoding, composition and NDI sending should run on appropriate worker / media threads.
 
-State updates sent to the UI should be lightweight summaries rather than full media frames unless the rendering architecture explicitly requires shared GPU resources.
+State updates sent to the UI should be lightweight summaries. Live preview should consume shared render/frame resources rather than causing a second decode path.
 
 ## Persistence
 
 Configuration should be local-first.
 
-A show file should reference stable logical identifiers rather than only transient runtime objects.
+A show file should reference stable logical identifiers rather than transient runtime objects.
+
+Views reference logical camera IDs, not RTSP pipeline instances.
 
 The storage format should be versioned from the beginning so future migrations are possible.
-
-Potential format:
-
-- JSON or similar structured local document for early versions;
-- SQLite if configuration, history or diagnostics become relational enough to justify it.
-
-Decision deferred until the data model is fully defined.
 
 ## Dependency boundaries
 
 The application should keep these concepts loosely coupled:
 
 - camera discovery;
-- camera configuration;
-- media ingest;
+- logical camera configuration;
+- single camera ingest/decode ownership;
+- shared frame routing;
 - composition;
 - NDI output;
 - UI;
 - show persistence.
 
-This allows, for example, a future SRT output module to be added without rewriting camera ingest.
+This allows a future output module to consume composed or shared frames without creating another camera connection.
 
 ## Failure domains
 
@@ -236,13 +331,42 @@ The application should explicitly distinguish:
 
 Each failure should have a targeted recovery path.
 
+A downstream failure must not cause the camera manager to open additional duplicate pipelines as a recovery mechanism.
+
+## Resource accounting / diagnostics
+
+Diagnostics should make accidental duplicate sessions detectable during development and support.
+
+Per configured camera, diagnostics should expose at least:
+
+```text
+RTSP sessions owned by RoboCam-Hub: 1
+Decoder instances:                  1
+Current internal consumers:         4
+  - View: Spots A
+  - View: All Spots
+  - View: SR Fullscreen
+  - Local preview
+```
+
+A configured active camera showing more than one owned RTSP session should be treated as an architectural fault unless an explicit temporary diagnostic mode justifies it.
+
 ## Initial architectural decisions to validate
 
 Before committing to production architecture, prototype and measure:
 
-1. GStreamer software decode vs hardware decode at 720p60 × 6 or more streams.
-2. GStreamer compositor vs custom GPU compositor.
-3. Direct NDI SDK sender integration.
-4. End-to-end latency through grandMA3.
-5. Network behaviour when cameras and NDI share a NIC vs separate NICs.
-6. Recovery when one RTSP source is physically disconnected during active output.
+1. One RTSP/decode pipeline feeding multiple simultaneous Views without creating duplicate camera connections.
+2. GStreamer software decode vs hardware decode at 720p60 × 8 streams.
+3. GStreamer compositor vs custom GPU compositor.
+4. Direct NDI SDK sender integration.
+5. Two simultaneous 1080p60 NDI outputs while reusing the same eight single-decoded camera sources.
+6. End-to-end latency through grandMA3.
+7. Network behaviour when cameras and NDI share a NIC vs separate NICs.
+8. Recovery when one RTSP source is physically disconnected during active output.
+9. Discovery-preview handover without leaving a second connection open.
+
+## Adopted architectural invariant
+
+**One physical/configured camera = one RoboCam-Hub RTSP session = one decode pipeline.**
+
+Every View, preview and NDI Output fans out from that shared decoded source state. Duplicate camera sessions for downstream consumers are prohibited by design.

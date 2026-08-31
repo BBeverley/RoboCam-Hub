@@ -4,18 +4,50 @@
 
 Define how RoboCam-Hub discovers, connects to, receives, decodes and supervises followspot camera feeds with the lowest practical latency while remaining robust enough for live touring use.
 
-This document describes the ingest side only. Camera configuration management, multiview composition and NDI output are specified separately.
+This document describes ingest only. Multiview composition, NDI output and application settings are specified separately.
+
+## V1 scope decisions
+
+The following product decisions are now locked for v1:
+
+- support up to **8 simultaneous camera feeds**;
+- support **multiple camera network adapters simultaneously**;
+- remember previously selected adapters between application sessions;
+- tolerate previously selected USB NICs being absent at startup and reconnect to them when they reappear;
+- support both **manual camera IP entry** and **optional automatic discovery**;
+- for Robe-supported camera workflows, use **RTSP profile 2 only** in v1;
+- default to **UDP / low-latency transport**;
+- allow explicit per-camera TCP fallback;
+- do not silently fall back from UDP to TCP;
+- camera configuration is **read-only** from RoboCam-Hub;
+- report observable camera/profile information where possible, but do not modify camera settings.
 
 ## Current proven hardware
 
 RoboCam-Hub is initially being designed around camera systems found in Robe BMFL FollowSpot / RoboSpot deployments.
 
-Known camera models currently tested or observed:
+Known models currently tested or observed:
 
 - Samsung SNZ-6320;
 - Wisenet / Hanwha XNZ-L6320A family.
 
-The application should not hard-code support to these models only. Any camera capable of supplying a compatible RTSP/RTP H.264 stream should be usable through manual configuration, even if enhanced discovery or configuration features are unavailable.
+The ingest engine should remain generic enough to accept other compatible RTSP/H.264 sources through manual configuration, but v1 workflow assumptions may be optimised for the Robe-supported cameras above.
+
+## Robe profile constraint
+
+For v1, RoboCam-Hub will request:
+
+```text
+rtsp://<camera-address>/profile2/media.smp
+```
+
+for supported Robe camera installations.
+
+Profile 2 is the documented/default Robe stream path used for this workflow. RoboCam-Hub should not expose arbitrary profile selection in the normal v1 UI.
+
+This is intentional. Logging into or reconfiguring the camera is not considered part of the supported Robe operator workflow, and RoboCam-Hub must avoid encouraging configuration changes that could affect the RoboSpot system.
+
+A future advanced mode may support other profiles for generic cameras, but this is outside the initial scope.
 
 ## Primary ingest protocol
 
@@ -24,23 +56,23 @@ Initial ingest target:
 - RTSP session control;
 - RTP media transport;
 - H.264 video;
-- UDP transport preferred for operator-low-latency mode.
+- UDP transport by default.
 
-The application should support TCP transport as a fallback where UDP is unavailable or unreliable.
-
-### Why UDP is preferred
+### Low-latency principle
 
 For operator monitoring, the newest frame is more valuable than guaranteed delivery of an older frame.
 
-TCP retransmission can preserve image integrity at the cost of increasing latency when packets are delayed or lost. UDP permits the media pipeline to discard incomplete or late data and continue with fresher frames.
-
-The application therefore prioritises:
+RoboCam-Hub therefore prioritises:
 
 > frame freshness over perfect continuity.
 
+TCP is available as a deliberate per-camera compatibility option where UDP is unreliable or unavailable.
+
+The application must clearly indicate when a source is using TCP because the latency characteristics may differ.
+
 ## Proven low-latency GStreamer behaviour
 
-The following behaviour has been manually tested and produces an RTSP feed that feels substantially closer to the RoboSpot BaseStation than conventional OBS RTSP playback:
+The following behaviour has been manually tested and produces a feed that feels very close to the RoboSpot BaseStation:
 
 ```text
 rtspsrc
@@ -63,11 +95,11 @@ video consumer
 
 A software-decoding test using `avdec_h264 max-threads=1` also produced very low perceived latency.
 
-These exact element choices are not yet a permanent architectural requirement. They are the reference behaviour against which embedded ingest implementations should be benchmarked.
+These settings are the reference behaviour against which the embedded media implementation should be benchmarked.
 
 ## Camera stream characteristics observed
 
-A tested Wisenet camera profile has been observed with approximately the following settings:
+A tested Wisenet profile has been observed with approximately:
 
 - H.264;
 - 1280 × 720;
@@ -79,248 +111,9 @@ A tested Wisenet camera profile has been observed with approximately the followi
 - Smart Codec disabled;
 - Dynamic GOV disabled.
 
-The GOV length of 1 is considered significant for low latency because it minimises dependence on long inter-frame prediction chains.
+RoboCam-Hub may report observable characteristics such as codec, resolution, frame rate and stream health, but must not modify encoder settings.
 
-RoboCam-Hub must initially treat camera-side stream configuration as an external dependency and report what it can observe rather than silently changing it.
-
-Future camera-management functionality may validate or apply known-good low-latency profiles, but that must be implemented separately and conservatively.
-
-## Stream addressing
-
-The application must support both:
-
-1. automatically discovered stream URLs where supported;
-2. manually entered RTSP URLs.
-
-Known Hanwha / Samsung deployments commonly expose profile-based URLs such as:
-
-```text
-rtsp://<camera-address>/profileN/media.smp
-```
-
-The application must not assume a fixed profile number across every camera.
-
-### Camera source record
-
-Each logical camera should store at minimum:
-
-- stable internal source ID;
-- user-facing name, e.g. `Spot 1`;
-- camera IP address or hostname;
-- RTSP URL;
-- username where required;
-- credential reference;
-- preferred transport: UDP / TCP / Auto;
-- selected network adapter;
-- expected resolution;
-- expected frame rate;
-- enabled / disabled state;
-- optional model / manufacturer metadata;
-- optional serial or hardware identifier where discoverable.
-
-Passwords should not be stored directly in plaintext show files.
-
-## Network interface binding
-
-Camera ingest must be explicitly associated with a selected camera network adapter.
-
-The application must support systems where:
-
-- the camera VLAN exists only on one dedicated NIC;
-- cameras exist on multiple VLANs reachable through one NIC;
-- camera and NDI networks use separate physical adapters;
-- camera and NDI traffic intentionally share one adapter.
-
-RoboCam-Hub must not assume the Windows default route is the correct path to a camera.
-
-Where technically possible, discovery and media sockets should be bound to the selected interface or source address rather than relying only on operating-system route preference.
-
-## Discovery
-
-Discovery is desirable but must never be mandatory.
-
-Initial discovery goals:
-
-- enumerate active local network adapters;
-- allow the user to choose which adapter(s) to scan;
-- discover compatible cameras using ONVIF / WS-Discovery where supported;
-- display manufacturer, model, IP and identifying metadata when available;
-- allow discovered devices to be assigned to logical spots;
-- permit manual addition when discovery fails.
-
-Discovery must not automatically alter the camera.
-
-### Future enhanced discovery
-
-Potential later capability:
-
-- interrogate available media profiles;
-- identify codec, resolution, fps and GOP / GOV configuration;
-- determine which profile best matches RoboCam-Hub low-latency requirements;
-- detect known Robe / Hanwha / Samsung camera families;
-- offer a validation result such as `Optimised`, `Usable`, or `High-latency configuration`.
-
-## Connection workflow
-
-For each enabled source, the camera manager should:
-
-1. verify that the selected NIC is available;
-2. resolve / validate the camera address;
-3. open the RTSP session;
-4. negotiate the requested transport;
-5. start receiving RTP;
-6. depayload and decode the stream;
-7. publish the newest decoded frame to the frame router;
-8. continuously report health and freshness metrics.
-
-A failure at one stage must be reported distinctly rather than collapsed into a generic `Camera Offline` state.
-
-## Source states
-
-Suggested runtime state machine:
-
-```text
-Disabled
-  ↓
-Waiting for NIC
-  ↓
-Connecting
-  ↓
-Negotiating RTSP
-  ↓
-Receiving
-  ↓
-Healthy
-```
-
-Failure / degraded states may include:
-
-```text
-Camera unreachable
-Authentication failed
-RTSP failed
-No RTP received
-Decoder stalled
-Frame rate degraded
-Stale video
-Reconnecting
-```
-
-The UI may simplify these into user-friendly states while retaining detailed diagnostic information underneath.
-
-## Freshness and queue policy
-
-The ingest system must be designed to prevent progressive latency accumulation.
-
-Requirements:
-
-- queues must be bounded;
-- stale frames should be dropped;
-- downstream slowdown must not allow an unbounded backlog;
-- a source recovering from a temporary stall should return to the newest available media rather than replay buffered history;
-- one slow source must not block any other source.
-
-### Operator mode
-
-Default operator mode should use the most aggressive practical low-latency settings.
-
-Typical characteristics:
-
-- zero or minimal jitter buffer;
-- UDP preferred;
-- late-frame dropping;
-- no presentation-time synchronisation that intentionally delays display;
-- bounded one-frame or similarly tiny queues where technically appropriate.
-
-### Compatibility mode
-
-A later compatibility mode may trade some latency for resilience on poorer networks, using:
-
-- non-zero jitter buffering;
-- TCP transport;
-- less aggressive dropping.
-
-This should not be the default for followspot operation.
-
-## Decoder strategy
-
-Initial implementation should support software H.264 decoding because it is known to work and provides a predictable reference point.
-
-Hardware decode should be benchmarked rather than assumed to be lower latency.
-
-Tests should compare at least:
-
-- software decode;
-- available Windows GPU decode path(s);
-- CPU usage;
-- GPU usage;
-- frame latency;
-- behaviour at 1, 2, 4, 6 and higher simultaneous feeds;
-- recovery after packet loss or camera disconnect.
-
-The chosen decoder should minimise frame reordering and internal buffering where possible.
-
-## Reconnection behaviour
-
-Touring operation requires automatic recovery.
-
-When a camera disappears, RoboCam-Hub should:
-
-- immediately mark the source stale / lost;
-- preserve its logical `Spot N` assignment;
-- keep the rest of the multiview operating;
-- retry connection automatically;
-- use a bounded reconnect backoff;
-- recover without requiring application restart;
-- discard old queued media on recovery;
-- return directly to the current live frame.
-
-A proposed reconnect sequence is:
-
-```text
-Immediate retry
-→ short retry interval
-→ progressively slower retry interval
-→ capped retry interval until source returns
-```
-
-Exact timing remains TBD and should be tested against real RoboSpot workflows.
-
-## Authentication and credentials
-
-The application should support authenticated RTSP cameras.
-
-Requirements:
-
-- username may be stored as part of camera configuration;
-- passwords must use an OS-backed secure credential mechanism where feasible;
-- exported show files should reference credentials rather than contain raw passwords;
-- the UI should provide a clear `Authentication failed` state;
-- logs must redact credentials and credential-bearing RTSP URLs.
-
-## Diagnostics per camera
-
-At minimum, expose or record:
-
-- connection state;
-- camera address;
-- selected RTSP profile / URL;
-- selected transport;
-- negotiated codec;
-- negotiated resolution;
-- received frame rate;
-- decoded frame rate;
-- last-frame age;
-- dropped-frame count where measurable;
-- reconnect count;
-- packet-loss indicators where measurable;
-- active NIC;
-- decoder type;
-- current ingest pipeline state.
-
-Advanced diagnostics should be available without cluttering the normal show UI.
-
-## Camera naming and logical assignment
+## Camera source model
 
 Network identity and show identity must remain separate.
 
@@ -330,56 +123,263 @@ Example:
 Logical name: Spot 1
 Device: Wisenet XNZ-L6320A
 IP: 10.110.0.12
-RTSP: profile2/media.smp
+RTSP: rtsp://10.110.0.12/profile2/media.smp
+Camera NIC: USB Ethernet 2
+Transport: UDP
 ```
 
-If the camera IP changes, the user should be able to update or rediscover the device without rebuilding the multiview layout.
+Each logical camera source should store at minimum:
 
-Likewise, a spare camera should be assignable to `Spot 1` while preserving the output layout and NDI configuration.
+- stable internal source ID;
+- user-facing name, e.g. `Spot 1`;
+- camera IP address or hostname;
+- derived RTSP profile-2 URL;
+- preferred transport: UDP or TCP;
+- selected camera NIC;
+- enabled / disabled state;
+- optional manufacturer/model metadata;
+- optional discovered hardware identifier;
+- last-known negotiated resolution and frame rate.
 
-## Safety around camera configuration
+Credentials should not be required by the normal Robe workflow. If generic authenticated RTSP support is added, passwords must not be stored in plaintext show files.
 
-RoboCam-Hub must initially be read-only with respect to camera configuration unless the user explicitly invokes a future management action.
+## Multiple camera network adapters
 
-It must not silently:
+V1 must support a **list of enabled camera NICs**, not one global camera NIC.
 
-- factory-reset a camera;
+Typical examples include:
+
+- one built-in Ethernet adapter plus one or more USB Ethernet adapters;
+- different camera VLANs presented on different adapters;
+- temporary touring adapters that are not always connected;
+- camera and NDI networks deliberately separated physically.
+
+### Adapter persistence
+
+RoboCam-Hub should remember previously enabled adapters using stable operating-system interface identifiers where possible rather than only the user-visible adapter name.
+
+At startup:
+
+- present all currently available NICs;
+- automatically restore previously enabled NICs that are present;
+- retain missing remembered NICs as `Unavailable` rather than deleting them;
+- automatically recognise a remembered USB NIC if it is reconnected during the session;
+- allow the user to remove a remembered NIC from the configuration explicitly.
+
+The application must not assume the Windows default route is the correct path to a camera.
+
+Where technically possible, discovery and RTSP/RTP sockets should be bound to the selected interface or source address.
+
+## Camera discovery
+
+Discovery is optional and must never be required to operate the application.
+
+V1 discovery goals:
+
+- scan only user-enabled camera NICs;
+- discover compatible cameras using ONVIF / WS-Discovery where available;
+- display useful metadata such as IP, manufacturer and model where available;
+- allow a discovered camera to be assigned to a logical `Spot N` source;
+- construct/use the supported profile-2 RTSP path;
+- never modify the discovered camera.
+
+### Manual camera entry
+
+Manual entry must always work.
+
+The minimum manual workflow should be:
+
+1. add camera;
+2. enter IP address;
+3. choose camera NIC;
+4. choose UDP or TCP;
+5. assign logical name / spot number;
+6. connect using profile 2.
+
+The user should not need to type the full RTSP URL for the normal Robe workflow.
+
+## Read-only camera reporting
+
+Where information can be obtained without altering camera configuration, RoboCam-Hub should report it.
+
+Useful fields include:
+
+- manufacturer/model;
+- IP address;
+- active profile path;
+- codec;
+- negotiated resolution;
+- received/decoded fps;
+- transport;
+- active NIC;
+- last-frame age;
+- packet loss indicators where available;
+- reconnect count;
+- stream health.
+
+If configuration parameters such as GOP/GOV can be read safely without requiring unsupported management credentials, they may be shown as diagnostic information.
+
+RoboCam-Hub must not offer camera configuration edits in v1.
+
+## Connection workflow
+
+For each enabled source, the camera manager should:
+
+1. verify the selected NIC is available;
+2. validate the camera address;
+3. build the profile-2 RTSP URL;
+4. open the RTSP session on the selected NIC;
+5. request the configured transport;
+6. receive RTP;
+7. depayload and decode;
+8. publish only the newest usable decoded frame;
+9. continuously report health/freshness metrics.
+
+A failure at one stage must be distinguishable from failures at other stages.
+
+## Source states
+
+Suggested detailed runtime states:
+
+```text
+Disabled
+Waiting for NIC
+Connecting
+Negotiating RTSP
+Receiving
+Healthy
+Camera unreachable
+RTSP failed
+No RTP received
+Decoder stalled
+Frame rate degraded
+Stale video
+Reconnecting
+```
+
+The normal show UI may reduce these to simpler statuses such as `Live`, `Connecting`, `Offline`, `Degraded` and `NIC Missing`, with detailed diagnostics available separately.
+
+## Freshness and queue policy
+
+The ingest system must prevent progressive latency accumulation.
+
+Requirements:
+
+- queues are bounded;
+- stale frames are dropped;
+- downstream slowdown never creates an unbounded backlog;
+- after a stall, a source returns to the newest available frame instead of replaying buffered history;
+- one slow or failed source never blocks another source;
+- compositor consumers should always receive the newest completed frame available.
+
+## Decoder strategy
+
+Software H.264 decoding is the known-good reference implementation.
+
+Hardware decode should be benchmarked rather than assumed to be lower latency.
+
+Tests should compare:
+
+- software decode;
+- available Windows hardware decode paths;
+- CPU/GPU usage;
+- latency;
+- 1, 2, 4, 6 and 8 simultaneous 720p60 feeds;
+- behaviour after packet loss;
+- recovery after disconnect/reconnect.
+
+## Reconnection behaviour
+
+When a camera disappears, RoboCam-Hub should:
+
+- mark the source stale/lost immediately;
+- preserve its logical spot assignment;
+- leave every other feed operating;
+- retry automatically;
+- use bounded reconnect backoff;
+- recover without application restart;
+- discard old buffered media on recovery;
+- return directly to the current live frame.
+
+If the selected camera NIC itself disappears, the source should enter `Waiting for NIC` and resume automatically when that remembered adapter returns.
+
+## Diagnostics per camera
+
+At minimum expose or record:
+
+- logical source name;
+- camera address;
+- connection state;
+- profile path (`profile2/media.smp`);
+- UDP/TCP transport;
+- active NIC;
+- negotiated codec;
+- resolution;
+- received frame rate;
+- decoded frame rate;
+- last-frame age;
+- dropped-frame count where measurable;
+- reconnect count;
+- packet-loss indicators where measurable;
+- decoder type;
+- current pipeline state.
+
+Advanced diagnostics should remain available without cluttering the normal operator interface.
+
+## Camera replacement workflow
+
+The logical `Spot N` object must be persistent independently of the physical camera.
+
+If a camera fails:
+
+1. select `Spot N`;
+2. assign a replacement discovered/manual camera IP;
+3. retain the existing logical spot identity;
+4. retain every multiview tile, label and NDI output that references that spot;
+5. reconnect without rebuilding layouts.
+
+## Hard safety boundary around camera management
+
+RoboCam-Hub v1 must not:
+
+- factory reset a camera;
 - change its IP address;
 - alter credentials;
-- modify a RoboSpot-required profile;
-- change encoder settings;
+- change encoder/profile settings;
+- alter a RoboSpot-required stream profile;
 - reboot the camera.
 
-Future `Apply Low-Latency Profile` functionality should use an explicit preview / confirmation model and should avoid modifying the stream profile used by an active RoboSpot BaseStation unless proven safe.
+The application is a **consumer and diagnostic viewer**, not a Robe camera configuration utility.
 
-## Open design decisions
+## Remaining design decisions
 
-The following still need to be decided through testing and product planning:
+Still to define through implementation/testing:
 
-1. Should UDP be forced by default or should `Auto` attempt UDP first and fall back to TCP?
-2. Should the application support multiple camera NICs simultaneously in v1, or one selected camera NIC with multiple reachable VLANs?
-3. What is the target maximum number of simultaneous camera feeds for v1?
-4. Which camera discovery protocol(s) are mandatory for v1?
-5. Should v1 inspect camera media profiles, or only ingest a supplied / selected RTSP URL?
-6. What reconnect timing provides the best balance between fast recovery and avoiding connection storms?
-7. Should per-camera latency mode be configurable, or should latency policy be global?
-8. Which secure credential store should the Windows application use?
-9. Can the same decoded frame be shared efficiently between local preview, compositor and future direct single-camera NDI outputs without copies?
+1. reconnect timing/backoff values;
+2. exact ONVIF discovery support across Samsung and Wisenet generations;
+3. stable Windows NIC identity strategy for USB adapters;
+4. secure credential approach if authenticated generic cameras are later supported;
+5. decoder selection/fallback policy;
+6. whether each camera may bind to exactly one NIC or optionally try a user-ordered NIC list;
+7. how source latency/health should be estimated and displayed.
 
 ## Initial acceptance tests
 
-A camera-ingest implementation is not considered ready until it passes at least these tests:
+An ingest implementation is not ready until it can at least:
 
-- connect to a known Wisenet camera over UDP;
-- connect to a known Samsung camera over UDP;
-- manually select a valid RTSP profile;
-- maintain 720p60 ingest without progressive latency growth;
-- disconnect Ethernet from one active camera and verify all other sources remain live;
-- reconnect that camera and recover automatically;
-- restart a camera while the application remains open and recover automatically;
-- run at least six simultaneous 720p60 streams on the reference machine;
-- confirm stale frames are dropped rather than accumulated;
-- verify a lost camera never blocks the compositor;
-- verify credentials are not exposed in logs;
+- connect to known Wisenet and Samsung cameras using profile 2 over UDP;
+- manually add a camera using only IP, logical name and NIC selection;
+- optionally discover supported cameras;
+- maintain 720p60 without progressive latency growth;
+- run **8 simultaneous 720p60 feeds** on the agreed reference machine or clearly identify the hardware limit during benchmarking;
+- use multiple camera NICs simultaneously;
+- remember enabled USB NICs across restarts;
+- show an absent remembered NIC without losing its configuration;
+- automatically recover when that NIC is reattached;
+- disconnect one active camera without affecting any other source;
+- reconnect/restart a camera and recover automatically;
+- discard stale frames rather than accumulate them;
 - verify traffic exits through the selected camera NIC;
-- compare end-to-end latency against the manually proven GStreamer reference pipeline.
+- report active transport and camera health;
+- perform no camera configuration writes;
+- compare end-to-end ingest latency against the manually proven GStreamer reference pipeline.

@@ -19,7 +19,7 @@ Users may start from:
 
 Templates are starting points, not locked layouts.
 
-Once created, every element may be moved, resized, transformed, layered or removed.
+Once created, every element may be moved, resized, transformed, layered or removed while the editor is unlocked.
 
 ```text
 Named Camera Sources
@@ -58,7 +58,7 @@ Reference direction:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ ← Views   Spots A      Undo  Redo     1920×1080 60fps        Save / Live │
+│ ← Views   Spots A      Undo  Redo     1920×1080 60fps     Show Mode [OFF] │
 ├────────────────┬───────────────────────────────────────────┬────────────────┤
 │ SOURCES        │                                           │ PROPERTIES     │
 │                │                                           │                │
@@ -413,41 +413,108 @@ It should cover at least:
 
 A bounded history is acceptable.
 
-## Editing an actively transmitted View
+## Show Mode
 
-A View may be referenced by a live NDI Output while being edited.
+RoboCam-Hub should use a single **Show Mode** rather than separate Live Edit and Staged Edit workflows.
 
-RoboCam-Hub should support two workflows.
+The purpose of Show Mode is to make the View safe during a live performance by locking the design surface against accidental edits while allowing the live media pipelines and NDI outputs to continue normally.
 
-### Live Edit
+### Show Mode OFF
 
-Changes are reflected immediately in outputs using that View.
+This is the normal setup / rehearsal state.
 
-Useful during setup and rehearsal.
+The user may:
 
-The UI must show a prominent but non-obstructive indicator:
+- select canvas elements;
+- move, resize, crop, rotate and flip elements;
+- drag cameras from the Sources rail;
+- add/delete/duplicate elements;
+- reorder layers;
+- change element properties;
+- use Undo/Redo;
+- alter the View freely.
+
+If the View is already being transmitted by an NDI Output, edits are reflected live as they are made.
+
+### Show Mode ON
+
+The canvas becomes operationally read-only.
+
+Show Mode should prevent accidental design changes by disabling:
+
+- element selection handles;
+- dragging/resizing/rotation;
+- crop controls;
+- source replacement by drag/drop;
+- adding/removing canvas elements;
+- layer reordering;
+- destructive transform shortcuts;
+- editable element property controls.
+
+The View continues rendering normally and all active NDI Outputs remain live.
+
+Camera health, source-loss indicators and application diagnostics must continue updating.
+
+The UI should show an obvious persistent state such as:
 
 ```text
-● LIVE EDIT — changes are on air
+🔒 SHOW MODE
 ```
 
-### Staged Edit
-
-Changes are made to a working copy while the existing published View continues unchanged.
-
-User then chooses:
+or:
 
 ```text
-Apply to Live
+Show Mode  [ON]
+Canvas Locked
 ```
 
-This is safer during an active performance.
+The indicator must be prominent enough that a user immediately understands why the canvas cannot be edited, but should not cover the preview or appear in the NDI output.
 
-Initial release may default to Live Edit for simplicity if Staged Edit significantly delays development, but the architecture should not make Staged Edit difficult to add.
+### Entering Show Mode
+
+Show Mode should be accessible from a prominent button/toggle in the View editor and potentially from the main Operate screen.
+
+Enabling it should be immediate and should not stop/restart camera or NDI pipelines.
+
+No confirmation should normally be required to enable Show Mode because it is a protective action.
+
+### Leaving Show Mode
+
+Leaving Show Mode re-enables editing.
+
+To prevent accidental unlocks during a performance, the app may use one lightweight safeguard such as:
+
+- a deliberate `Unlock Editing` action;
+- click-and-confirm;
+- hold-to-unlock;
+- optional user preference for confirmation.
+
+This should remain fast enough for legitimate show-time adjustments.
+
+### Scope
+
+Initial recommendation: Show Mode is a **global application/show state**, not a per-element state.
+
+When enabled, all View canvases are protected from layout editing. This avoids a situation where one output is accidentally editable while another is locked.
+
+Individual element lock controls still remain useful during design mode for protecting background artwork or finished groups.
+
+### What Show Mode does not lock
+
+Show Mode should not prevent operational actions that may be necessary during a show, such as:
+
+- camera reconnect/recovery;
+- viewing diagnostics;
+- selecting which View to preview locally;
+- starting/stopping an NDI Output if intentionally requested;
+- replacing a failed physical camera behind an existing logical Spot from the Cameras area;
+- switching an Output to another already-prepared View, if this is an intentionally supported show-time workflow.
+
+These are operational controls rather than canvas-design changes.
 
 ## Source loss while editing
 
-A camera tile remains editable even if its source is offline.
+A camera tile remains present even if its source is offline.
 
 The editor should display a placeholder containing the logical source name rather than removing the element.
 
@@ -462,7 +529,7 @@ Example:
 └─────────────────────┘
 ```
 
-This allows layouts to be designed without every physical camera connected.
+This allows layouts to be designed without every physical camera connected and allows Show Mode to preserve the intended layout during a source failure.
 
 ## Property panel behaviour
 
@@ -506,9 +573,11 @@ Multi-selection:
 - common alignment/distribution actions;
 - common transform controls where meaningful.
 
+When Show Mode is enabled, editable design controls should be disabled or replaced with read-only values.
+
 ## Context menu
 
-Right-clicking an element should expose common actions similar to professional visual tools:
+Right-clicking an element should expose common actions similar to professional visual tools when Show Mode is off:
 
 - Transform;
 - Fit to Canvas;
@@ -532,6 +601,8 @@ Camera-specific options may include:
 - Fill;
 - Reset Crop.
 
+In Show Mode, design/transform context menus should not be available.
+
 ## Keyboard shortcuts
 
 Initial useful shortcuts:
@@ -546,6 +617,8 @@ Initial useful shortcuts:
 - Shift+Arrow — Large nudge;
 - Ctrl+A — Select all canvas elements;
 - optional OBS-like transform shortcuts where intuitive.
+
+Design-changing shortcuts must be disabled while Show Mode is active.
 
 Exact shortcut set should be documented in-app.
 
@@ -599,7 +672,8 @@ Requirements:
 - local editor preview may drop frames under load rather than back-pressure ingest or NDI;
 - dragging/resizing must not create an accumulating media queue;
 - rendering an editor selection outline must be separate from the clean View frame sent to NDI;
-- source transforms should be GPU-backed where the selected rendering architecture allows it efficiently.
+- source transforms should be GPU-backed where the selected rendering architecture allows it efficiently;
+- entering or leaving Show Mode must not restart media or NDI pipelines.
 
 ## Initial acceptance tests
 
@@ -617,7 +691,10 @@ Requirements:
 - save and reload without transform drift;
 - build a 2×2 layout from a template;
 - duplicate the View and replace Spots 1–4 with Spots 5–8;
-- edit a View while live without adding ingest latency;
+- enable Show Mode and verify all design manipulation is blocked;
+- verify active NDI output continues without interruption when Show Mode is enabled/disabled;
+- verify camera health and diagnostics continue updating in Show Mode;
+- replace a failed physical camera behind a logical Spot while Show Mode is active without changing the View layout;
 - preserve elements when a physical camera goes offline.
 
 ## Decisions currently adopted
@@ -629,3 +706,5 @@ Requirements:
 - Cameras can be dragged either into predefined Camera Slots or onto blank canvas space.
 - Camera elements support resize, crop, rotate, horizontal flip and vertical flip.
 - Physical camera/network settings remain separate from View design.
+- Show Mode is used to lock the canvas during live operation rather than maintaining separate Live Edit and Staged Edit workflows.
+- Show Mode protects View design while leaving operational camera/NDI functions available.

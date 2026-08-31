@@ -139,7 +139,7 @@ or:
 
 ### Better kept out of the rail
 
-The following should normally remain in Camera Details / Diagnostics rather than permanently occupying the rail:
+The following should normally remain in Camera Settings / Diagnostics rather than permanently occupying the rail:
 
 - codec profile;
 - GOP/GOV value;
@@ -224,19 +224,66 @@ When Show Mode is ON, drag actions from the rail are disabled while health/statu
 
 ## Click behaviour
 
-Clicking a camera row should select/open lightweight source information without navigating away from the active workspace.
+Single-clicking a camera row should **not open a panel or navigate away**.
 
-Suggested behaviour:
+Instead, it should act as a locate/select action for the current View:
 
-- single click: select source and optionally highlight every occurrence of that logical camera in the current View;
-- double click or explicit details action: open Camera Details panel/modal;
-- context menu: Camera Details, Reconnect, Locate in Current View, Open Diagnostics.
+- highlight every occurrence of that logical camera in the active View;
+- bring those elements into obvious editor focus using a selection outline or temporary highlight;
+- if the camera is not present in the current View, leave the canvas unchanged and optionally show a subtle `Not used in this View` status/toast;
+- preserve normal multi-selection rules if more than one instance of the same logical source exists.
+
+This keeps the rail fast and predictable during layout work.
+
+### Right-click context menu
+
+Right-clicking a camera row should expose camera-specific actions without cluttering the normal rail.
+
+Initial actions:
+
+```text
+Locate in Current View
+Properties…
+Reconnect
+Diagnostics…
+```
+
+`Properties…` should open the application's Camera Settings area directly focused on the selected logical camera.
+
+The exact Camera Settings presentation is still to be finalised. It may be:
+
+- a combined Camera Settings window/page with a camera list on the left and selected-camera properties on the right; or
+- another consolidated settings layout that can deep-link directly to a specific camera.
+
+Regardless of final layout, right-click → `Properties…` must take the user straight to that camera's settings rather than requiring them to navigate through Settings manually.
+
+`Diagnostics…` should similarly open the relevant diagnostics context for the selected source.
+
+`Reconnect` is an operational action and should remain available in Show Mode.
 
 Network/configuration changes should remain in Camera Settings rather than being exposed directly in the rail.
 
-## Camera Details
+## Camera Settings deep-link requirements
 
-The expanded Camera Details panel/modal can contain:
+The Camera Source Rail should use a stable camera/source identifier when opening settings.
+
+Example conceptual route/state:
+
+```text
+Settings → Cameras → Spot 3
+```
+
+or, if camera management lives outside global Settings:
+
+```text
+Camera Settings → Spot 3
+```
+
+The application should preserve the user's current View/editor state while the settings interface is opened. Closing settings should return the user to the same workspace and canvas position where practical.
+
+## Camera Details / Settings content
+
+The selected camera settings/details context can contain:
 
 - logical camera name;
 - IP address;
@@ -254,6 +301,8 @@ The expanded Camera Details panel/modal can contain:
 - reconnect state;
 - last successful frame time;
 - Open Advanced Diagnostics.
+
+Editable fields should be clearly separated from read-only runtime telemetry.
 
 ## Health calculation
 
@@ -362,8 +411,8 @@ During Show Mode:
 
 - health indicators remain active;
 - metrics continue updating;
-- Camera Details remain accessible;
-- diagnostics remain accessible;
+- single-click locate/highlight remains available because it does not modify the canvas;
+- Properties and Diagnostics remain accessible;
 - reconnect actions remain available;
 - canvas/source assignment drag actions are disabled;
 - camera naming and configuration changes that could alter show behaviour should require leaving Show Mode or an explicit confirmation.
@@ -381,7 +430,9 @@ During Show Mode:
 - recover to Green without rapid colour flicker;
 - drag a source onto a Camera Slot when Show Mode is off;
 - prevent source dragging when Show Mode is on;
-- open detailed diagnostics without leaving the View editor;
+- single-click a camera row and highlight all uses of that source in the active View;
+- right-click a camera row and open Properties directly focused on that camera;
+- open camera diagnostics from the context menu;
 - display friendly NIC aliases.
 
 ## Decisions currently adopted
@@ -393,4 +444,6 @@ During Show Mode:
 - Amber means online but degraded/network unstable or dropping significant frames.
 - Red means camera offline/no usable stream.
 - IP, latency/freshness, active NIC and frame rate are shown as compact secondary information.
+- Single-click highlights that logical camera's occurrence(s) in the current View.
+- Right-click `Properties…` opens the selected camera directly in the Camera Settings interface.
 - Detailed technical diagnostics remain outside the rail.

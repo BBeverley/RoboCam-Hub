@@ -103,27 +103,63 @@ Camera B
 
 The logical camera name is the identity referenced by Views.
 
-The application may suggest a default name for convenience, but it must always be editable before the source is added.
+### Camera Location metadata as suggested name
+
+Supported cameras may expose a read-only `Location` metadata field. Robe-installed cameras may use this field as the physical camera/spot label, for example `SPOT_1`.
+
+When discovery can read a non-empty Location value, RoboCam-Hub should use it to pre-fill the logical Camera Name field.
+
+Example:
+
+```text
+Camera reports Location: SPOT_1
+
+Camera Name:
+[ SPOT_1 ]
+```
+
+The pre-filled name is only a suggestion. The user must be able to edit it freely before adding the camera:
+
+```text
+Camera reports Location: SPOT_1
+
+Camera Name:
+[ SR Followspot ]
+```
+
+RoboCam-Hub must preserve the distinction between:
+
+- camera-reported Location metadata; and
+- the user-defined RoboCam-Hub logical camera name.
+
+Changing the logical name in RoboCam-Hub must never write back to the camera Location field.
+
+If Location metadata is blank or unavailable, the Camera Name field remains user-editable and may use a simple temporary suggestion such as the device IP or `Camera`.
+
+If multiple discovered cameras report the same Location value, RoboCam-Hub should flag the duplicate for the user rather than assuming they are the same logical source.
 
 ## Discovery results
 
 Discovered cameras should appear in a temporary list and should not automatically become configured sources.
 
-Recommended layout:
+Where Location metadata is available, it should be visually useful in the discovery list:
 
 ```text
 DISCOVERED CAMERAS
 
-10.110.0.11   Wisenet XNZ-L6320A      [ Preview ] [ Add ]
-10.110.0.12   Wisenet XNZ-L6320A      [ Preview ] [ Add ]
-10.110.0.13   Samsung SNZ-6320         [ Preview ] [ Add ]
+SPOT_1   10.110.0.11   Wisenet XNZ-L6320A      [ Preview ] [ Add ]
+SPOT_2   10.110.0.12   Wisenet XNZ-L6320A      [ Preview ] [ Add ]
+          10.110.0.13   Samsung SNZ-6320         [ Preview ] [ Add ]
 ```
 
 Discovery results may include, where available and reliable:
 
+- camera Location metadata;
+- device name;
 - IP address;
 - manufacturer;
 - model;
+- serial number where exposed;
 - MAC address;
 - discovery/network interface;
 - availability of the expected Profile 2 stream.
@@ -132,7 +168,7 @@ Camera discovery data is informational only. RoboCam-Hub remains read-only with 
 
 ## Preview-assisted camera identification
 
-A preview is highly useful during discovery because the physical cameras may not expose meaningful operator-facing labels.
+A preview remains useful during discovery even when Location metadata exists, because a label may be blank, stale, duplicated or incorrect after a fixture/camera swap.
 
 The discovery UI should allow the user to preview a selected discovered camera before naming/adding it.
 
@@ -142,17 +178,20 @@ Recommended interaction:
 ┌──────────────────────────────┬───────────────────────────────┐
 │ DISCOVERED CAMERAS           │ CAMERA PREVIEW                │
 │                              │                               │
-│ > 10.110.0.11               │      [ live picture ]         │
-│   XNZ-L6320A                 │                               │
-│                              │ 10.110.0.11                   │
-│   10.110.0.12               │ XNZ-L6320A                    │
-│   XNZ-L6320A                 │                               │
-│                              │ Name this camera:             │
-│   10.110.0.13               │ [ SR Followspot            ]  │
+│ > SPOT_1                    │      [ live picture ]         │
+│   10.110.0.11               │                               │
+│   XNZ-L6320A                 │ Location: SPOT_1             │
+│                              │ IP: 10.110.0.11               │
+│   SPOT_2                    │ Model: XNZ-L6320A             │
+│   10.110.0.12               │                               │
+│                              │ Camera Name:                  │
+│   10.110.0.13               │ [ SPOT_1                   ]  │
 │   SNZ-6320                    │                               │
 │                              │ [ Add Camera ]                │
 └──────────────────────────────┴───────────────────────────────┘
 ```
+
+The user may immediately edit `SPOT_1` to any preferred logical name before adding it.
 
 The preview exists only for setup/identification. It is intentionally different from the normal Camera Source Rail, which should not contain live thumbnails.
 
@@ -171,13 +210,16 @@ A future implementation may optionally prefetch still thumbnails, but v1 should 
 
 ## Add discovered camera
 
-When the user clicks `Add`, present a compact assignment form:
+When the user clicks `Add`, present a compact assignment form with the Camera Name pre-filled from Location metadata where available:
 
 ```text
 ADD CAMERA
 
+Camera Location:
+SPOT_1
+
 Camera Name:
-[ SR Followspot ]
+[ SPOT_1 ]
 
 IP Address:
 10.110.0.11
@@ -190,6 +232,8 @@ Transport:
 
 [ Add Camera ]
 ```
+
+The Camera Name remains fully editable.
 
 The IP may be read-only in the discovery flow because it came from the discovered device; manual add remains available for entering a different IP.
 
@@ -225,7 +269,7 @@ Advanced arbitrary RTSP URL support may be available behind an Advanced option, 
 
 ## Camera list after assignment
 
-Once configured, the setup screen shows the user-defined names rather than generated Spot numbering.
+Once configured, the setup screen shows the user-defined logical names rather than generated Spot numbering.
 
 Example:
 
@@ -241,6 +285,8 @@ CAMERAS
 ```
 
 Names remain editable later through Camera ingest settings.
+
+The camera-reported Location may remain available in Properties/Diagnostics as read-only metadata.
 
 ## Step 4 — Create View(s)
 
@@ -352,8 +398,9 @@ Show Mode is always OFF after loading or creating a show.
 ## UX principles
 
 - user-defined camera naming is the default model;
-- discovered device identity and logical camera name are separate concepts;
-- preview is available specifically to identify which physical camera/spot a discovered IP belongs to;
+- camera Location metadata should pre-fill the logical name when available, but never lock it;
+- discovered device identity, camera-reported Location and logical camera name are separate concepts;
+- preview remains available to verify which physical camera/spot a discovered device belongs to;
 - discovery never writes to camera configuration;
 - no normal setup step exposes camera-side encoder/profile controls;
 - camera preview should not become a permanent source-rail thumbnail;
@@ -366,9 +413,13 @@ Show Mode is always OFF after loading or creating a show.
 - create a new show;
 - select camera and NDI network adapters;
 - discover supported cameras on the selected camera network;
+- read camera Location metadata where exposed;
+- pre-fill Camera Name from Location metadata;
+- edit the pre-filled Camera Name before adding the camera;
+- verify changing the logical name does not modify camera Location metadata;
+- flag duplicate Location values without merging devices;
 - select a discovered camera and display a low-latency preview;
 - identify a physical camera from that preview;
-- assign an arbitrary user-defined logical camera name;
 - add a discovered camera without modifying the physical camera;
 - manually add a camera with a user-defined name;
 - create a 2×2 View using named cameras;
@@ -379,9 +430,11 @@ Show Mode is always OFF after loading or creating a show.
 ## Decisions currently adopted
 
 - Camera names are always user-defined logical names.
+- Camera Location metadata is used as the default suggested name when available.
+- The user can always edit the suggested name before adding the source.
 - Fixed names such as Spot 1/Spot 2 are examples only, not enforced naming.
 - Discovery is explicitly initiated by the user.
-- Discovery provides a selected-camera live preview for physical identification.
+- Discovery provides a selected-camera live preview for physical identification/verification.
 - Discovery preview does not change the normal no-thumbnail Camera Source Rail design.
 - Only one discovery preview needs to run at a time in v1.
 - RoboCam-Hub remains read-only with respect to physical camera settings.

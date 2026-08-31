@@ -2,88 +2,199 @@
 
 ## Decision
 
-RoboCam-Hub should be built as a **native C++ desktop application using Qt 6 / Qt Quick (QML)** for the application shell and editor UI, with **GStreamer** embedded directly for RTSP ingest/decode and the **NDI SDK** integrated natively for clean NDI output.
+RoboCam-Hub should use a **cross-platform Avalonia UI application in C#/.NET**, backed by a **native C++20 media core** that owns all real-time camera, decode, frame-routing, compositing and NDI responsibilities.
 
 Primary implementation stack:
 
 ```text
-Language / Core:       C++20
-Desktop UI:            Qt 6 + Qt Quick / QML
-Build system:          CMake
-RTSP ingest/decode:    GStreamer 1.x
-View compositor:       Qt Quick Scene Graph / native GPU rendering layer
-NDI output:            NDI SDK native C/C++ integration
-Persistence:           versioned JSON / packaged .rchshow archive
-Licensing client:      native C++ HTTPS client + signed local lease
-Windows build:         MSVC x64
-macOS build:           Clang / Apple Silicon first
+Desktop UI / app shell:      Avalonia UI + C# / .NET
+Native media core:           C++20
+Build systems:               dotnet + CMake
+RTSP ingest/decode:          GStreamer 1.x inside native core
+Frame router:                native C++ latest-frame state
+View compositor:             native GPU-backed compositor
+NDI output:                  native NDI SDK integration
+Persistence:                 versioned JSON / packaged .rchshow archive
+Licensing client:            application service + signed local lease
+Windows target:              x64
+macOS target:                Apple Silicon first
 ```
 
-The architecture should keep the real-time media engine separate from the QML/UI layer even though both live in the same desktop application.
+Avalonia is responsible for the application experience. It must **not** become part of the per-frame camera or NDI media path.
 
-## Why this stack
+## Hard media invariant
 
-RoboCam-Hub is not primarily a forms/database desktop application. Its difficult requirements are:
+The architecture must preserve the following rule:
 
-- eight simultaneous low-latency 720p60 RTSP feeds;
-- direct control of GStreamer buffering and pipeline behaviour;
-- GPU composition of multiple live video surfaces;
-- multiple simultaneous 1080p60 NDI High Bandwidth outputs;
-- strict frame-freshness and back-pressure behaviour;
-- native Windows and macOS networking/device integration;
-- an OBS-style free-form visual editor;
-- clean View frames sent directly to NDI rather than screen capture;
-- predictable long-running live-show reliability.
+> **One configured physical camera = one RoboCam-Hub RTSP session = one decode pipeline.**
 
-A C++ core minimizes language/runtime boundaries between GStreamer, rendering, networking and NDI.
+A camera may be used by any number of Views, local previews or NDI outputs without opening another RTSP connection or creating another decoder.
 
-Qt provides one mature cross-platform desktop/UI framework for Windows and macOS while still allowing direct access to native C/C++ libraries and platform APIs.
-
-## UI framework: Qt Quick / QML
-
-Use Qt Quick/QML for new UI rather than building the application primarily with traditional Qt Widgets.
-
-QML is a strong fit for:
-
-- transformable camera rectangles;
-- drag/drop source assignment;
-- snapping and guides;
-- selection outlines and handles;
-- layers and Z-order;
-- responsive/collapsible panels;
-- animation and transient status states;
-- Auto/Light/Dark theming;
-- high-DPI Windows/macOS displays.
-
-The application logic and media engine remain C++ and expose only controlled models/state to QML.
-
-Avoid putting media-pipeline logic in JavaScript/QML.
-
-## Media engine boundary
-
-Recommended high-level process structure:
+Conceptually:
 
 ```text
-Qt / QML UI
-     ↓ commands + read-only state models
-Application Controller
-     ↓
-Media Engine (C++)
-├─ Camera Manager
-│  └─ GStreamer pipeline per camera
-├─ Latest Frame Router
-├─ View Render Engine
-├─ NDI Output Manager
-└─ Runtime Diagnostics
+Physical Camera
+      ↓
+ONE RTSP session
+      ↓
+ONE H.264 decode pipeline
+      ↓
+Shared latest-frame state / GPU resource
+      ↓
+Internal fan-out
+├─ View A
+├─ View B
+├─ View C
+├─ local selected View
+├─ fullscreen monitoring
+├─ NDI Output A
+└─ NDI Output B
 ```
 
-The UI thread must never run RTSP, decode, NDI send or heavy compositor work synchronously.
+This is a correctness requirement, not merely a performance optimisation.
 
-## GStreamer integration
+RoboCam-Hub must never create a second configured-camera stream just because the same source appears in multiple Views or Outputs.
 
-GStreamer should be linked/embedded as an application library rather than controlling long-running `gst-launch` child processes.
+## Why Avalonia + native C++ core
 
-Per-camera pipeline logic remains aligned with the proven prototype:
+The application has two very different workloads.
+
+### Application/UI workload
+
+Avalonia is a strong fit for:
+
+- Windows and macOS from one UI codebase;
+- Settings and licence dialogs;
+- camera/source rail;
+- first-run and New Show wizards;
+- free-form View-editor controls;
+- drag/drop and transform UI;
+- show-file management;
+- diagnostics;
+- Auto / Light / Dark themes;
+- polished commercial desktop UX.
+
+### Real-time media workload
+
+C++ remains the appropriate ownership boundary for:
+
+- RTSP/RTP sessions;
+- embedded GStreamer pipelines;
+- H.264 decode;
+- latest-frame ownership;
+- GPU texture/surface management;
+- clean View composition;
+- NDI High Bandwidth sender instances;
+- frame freshness and back-pressure policy;
+- high-frequency diagnostics.
+
+The managed/native split is therefore intentional: Avalonia controls the product, while the native engine controls the media.
+
+## Architectural boundary
+
+Recommended structure:
+
+```text
+Avalonia UI / C# application
+│
+├─ Views / ViewModels
+├─ Show workflow
+├─ Settings
+├─ Licensing UI/client orchestration
+├─ persistence orchestration
+└─ diagnostics presentation
+        │
+        │ low-frequency commands + state snapshots
+        ↓
+Native Media Core — C++20
+├─ Camera Manager
+│  └─ one GStreamer pipeline per configured camera
+├─ Camera Discovery / temporary discovery preview
+├─ Latest Frame Router
+├─ GPU View Compositor
+├─ NDI Output Manager
+├─ Network/media diagnostics
+└─ platform media adapters
+```
+
+The boundary between C# and C++ must be deliberately narrow.
+
+Appropriate calls include:
+
+```text
+AddCamera(...)
+RemoveCamera(...)
+UpdateCameraConfig(...)
+ReconnectCamera(...)
+CreateView(...)
+UpdateViewLayout(...)
+CreateOutput(...)
+RestartOutput(...)
+GetRuntimeSnapshot(...)
+```
+
+The boundary must **not** pass every decoded video frame through managed C# memory.
+
+## No per-frame managed round trip
+
+Avoid architectures such as:
+
+```text
+GStreamer decode
+→ C++ frame
+→ copy into C#
+→ Avalonia composition
+→ copy back to C++
+→ NDI
+```
+
+This would introduce unnecessary copies, ownership complexity and latency.
+
+Instead:
+
+```text
+GStreamer decode
+→ native frame / GPU resource
+→ native compositor
+→ clean View frame
+├─ native NDI sender
+└─ local Avalonia preview surface/interop
+```
+
+The local UI consumes a preview of the already-owned native rendering result. It does not own the camera streams.
+
+## Camera ingest ownership
+
+The native Camera Manager is the only component permitted to create normal configured-camera RTSP sessions.
+
+For each logical camera it owns exactly one ingest object containing, conceptually:
+
+```text
+CameraSession
+├─ logical source ID
+├─ camera address
+├─ selected camera NIC/network role
+├─ transport: UDP/TCP
+├─ GStreamer RTSP session
+├─ depay/decode pipeline
+├─ newest decoded frame/resource
+├─ health metrics
+└─ reconnect state
+```
+
+Views never create streams.
+
+NDI Outputs never create streams.
+
+Avalonia controls never create streams.
+
+Fullscreen monitoring never creates streams.
+
+## GStreamer path
+
+GStreamer remains embedded directly in the C++ core.
+
+The proven low-latency behaviour remains the starting point:
 
 ```text
 rtspsrc
@@ -93,49 +204,86 @@ rtspsrc
   protocols=udp
 → rtph264depay
 → decoder
-→ latest-frame boundary
+→ bounded/latest-frame boundary
 ```
 
-Each camera pipeline is independently restartable and failure isolated.
+TCP is an explicit per-camera fallback, not a silent automatic transport change.
 
-GStreamer binaries/runtime dependencies should be packaged with RoboCam-Hub so the user does not install/configure GStreamer separately.
+Each configured camera pipeline is independently reconnectable and failure-isolated.
 
-## GPU compositor
+## Internal frame fan-out
 
-The View compositor needs one authoritative clean render surface per active View.
+A decoded frame should become a shared internal resource referenced by consumers rather than copied into separate consumer queues.
 
 Conceptually:
 
 ```text
-Decoded Camera Frames
-       ↓
-GPU textures / latest frame references
-       ↓
-View compositor
-       ↓
-Clean View Frame
-   ├─ local Qt preview
-   └─ NDI sender
+Camera 1 decoder
+      ↓
+LatestFrame(Camera 1)
+      ↓
+View renderer reads reference
+      ↓
+View A + View B can both use Camera 1
 ```
 
-Do not render the NDI feed by screen-capturing a QML window.
+The application should favour immutable/shared frame references or platform-appropriate GPU-resource handles with explicit lifetime ownership.
 
-The implementation should investigate the cleanest Qt 6 rendering integration for sharing/importing decoded frame surfaces into the scene graph while avoiding unnecessary CPU copies.
+No consumer may force the source pipeline to wait.
 
-Initial platform GPU directions to benchmark:
+## View compositor
 
-- Windows: Direct3D-backed Qt RHI path;
-- macOS: Metal-backed Qt RHI path.
+The compositor belongs in the native media core.
 
-Qt's Rendering Hardware Interface (RHI) abstraction may be used where appropriate, but the media/compositor layer should retain a controlled abstraction so a lower-level native path can replace a Qt-specific implementation if benchmarking requires it.
+It is responsible for producing the authoritative clean View frame containing:
+
+- camera elements;
+- crop / scale / rotate / flip;
+- text;
+- images;
+- frames/shapes;
+- source-loss placeholders;
+- user-created branding.
+
+The compositor must not include application UI such as selection handles, health dots, Settings, camera rail or Show Mode controls.
+
+One clean View render may feed both local monitoring and one or more NDI Outputs.
+
+Where several Outputs reference exactly the same View at the same resolution/frame rate, the architecture should reuse the composed View result rather than re-decoding cameras or unnecessarily recomposing identical source content.
+
+## Avalonia preview integration
+
+Avalonia should display native render results through the most efficient practical platform interop path.
+
+The initial spike must compare available approaches for exposing the native View render into the Avalonia UI without copying full video frames through ordinary managed arrays on every frame.
+
+Possible implementation techniques may differ by OS and Avalonia version, but the abstraction should remain:
+
+```text
+Native View Render Target
+        ↓
+Preview Interop Adapter
+        ↓
+Avalonia visual control
+```
+
+If a zero-copy or low-copy GPU-backed preview path is available and reliable, use it.
+
+A CPU-copy preview fallback may exist for compatibility, but it must never become the NDI source and must not back-pressure the compositor.
 
 ## NDI integration
 
-Use the native NDI SDK from C++.
+NDI sending remains entirely native.
 
-RoboCam-Hub should provide the NDI sender with the clean composed View frame directly.
+```text
+Clean View frame
+      ↓
+NDI Output processing
+      ↓
+Native NDI SDK sender
+```
 
-Initial target remains:
+Initial target:
 
 ```text
 NDI High Bandwidth
@@ -144,231 +292,223 @@ Video only
 Multiple simultaneous senders
 ```
 
-The NDI integration is wrapped behind an `NdiOutputBackend` interface so platform/SDK changes do not leak into View or UI code.
+NDI never consumes an Avalonia window capture.
 
-## Cross-platform structure
+## Discovery preview special case
 
-Core code should be platform independent wherever possible.
+Discovery may temporarily require an RTSP connection before a camera becomes a configured source.
 
-Suggested source structure:
+This must not undermine the one-stream invariant.
+
+Rules:
+
+- only the currently selected discovered camera needs a live discovery preview in v1;
+- the temporary discovery session is clearly owned by the Discovery subsystem;
+- when a discovered device is added as a configured camera, the discovery connection must be stopped or transferred before the normal Camera Manager establishes ownership;
+- RoboCam-Hub must not leave both discovery and configured sessions connected to the same camera;
+- selecting an already-configured camera in discovery must reuse/report the existing source rather than opening another stream where possible.
+
+## Diagnostics invariant checking
+
+Development and Diagnostics builds should expose enough information to prove stream ownership.
+
+Example:
+
+```text
+SR Followspot
+RTSP sessions owned:      1
+Decoder instances:        1
+Internal View consumers:  3
+NDI outputs consuming:    2
+```
+
+If a configured camera reports more than one normal RoboCam-Hub RTSP session or decoder instance, that is treated as a software defect.
+
+Automated tests should validate that:
+
+- adding a camera starts one pipeline;
+- placing it into multiple Views does not increase session count;
+- adding multiple NDI Outputs does not increase session count;
+- switching local Views does not increase session count;
+- entering fullscreen does not increase session count;
+- leaving discovery for a newly configured camera does not leave a duplicate session alive.
+
+## Cross-platform organisation
+
+Suggested repository/source organisation:
 
 ```text
 src/
-├─ app/
-├─ domain/
-├─ media/
+├─ RoboCamHub.App/              # Avalonia / C#
+│  ├─ Views/
+│  ├─ ViewModels/
+│  ├─ Services/
+│  ├─ Persistence/
+│  ├─ Licensing/
+│  └─ NativeBridge/
+│
+├─ RoboCamHub.Media/            # C++20
 │  ├─ ingest/
+│  ├─ discovery/
 │  ├─ frames/
 │  ├─ compositor/
-│  └─ ndi/
-├─ persistence/
-├─ licensing/
-├─ network/
-├─ ui/
-│  ├─ qml/
-│  └─ models/
-└─ platform/
-   ├─ windows/
-   └─ macos/
+│  ├─ ndi/
+│  ├─ diagnostics/
+│  └─ platform/
+│     ├─ windows/
+│     └─ macos/
+│
+└─ tests/
 ```
 
-Platform folders contain only capabilities that genuinely differ, such as stable NIC identity, secure token storage, packaging helpers or OS-specific GPU/device handling.
+The native media core should expose a stable C-compatible ABI or similarly controlled interop surface rather than exposing arbitrary C++ object layouts directly to .NET.
 
-## Windows target
+## Interop strategy
 
-Initial Windows target:
+Initial recommendation is a small explicit native API with opaque handles and callbacks/state snapshots.
 
-- Windows 11 x64 primary;
-- MSVC toolchain;
-- signed installer/application;
-- Direct3D/Qt RHI rendering path;
-- platform-secure token/credential storage;
-- bundled GStreamer runtime;
-- bundled/licensed NDI runtime as permitted by the NDI SDK agreement.
-
-Windows 10 support should be determined against the selected Qt release and actual user need rather than assumed indefinitely.
-
-## macOS target
-
-Initial macOS target:
-
-- Apple Silicon primary;
-- supported current macOS releases;
-- Clang/Xcode toolchain;
-- Metal/Qt RHI rendering path;
-- signed and notarised application;
-- Keychain-based secure credential/licence storage where appropriate;
-- bundled GStreamer runtime/framework;
-- native NDI runtime as permitted by the NDI SDK agreement.
-
-Intel Mac support is optional until performance and dependency testing justifies it.
-
-## Why not Electron
-
-Electron is not recommended as the primary architecture.
-
-Although it would make general UI development fast, RoboCam-Hub would still require native modules for:
-
-- GStreamer;
-- NDI;
-- low-latency decoded frame surfaces;
-- GPU texture sharing;
-- stable NIC handling;
-- platform secure storage.
-
-That would produce a web UI plus a substantial native media engine with a high-frequency boundary between them. It adds Chromium/runtime overhead without simplifying the hardest parts of the product.
-
-## Why not Tauri
-
-Tauri is lighter than Electron, but the same architectural issue remains: the core application is a real-time native media/rendering system, while the webview would only own the controls/editor UI.
-
-The required frame/compositor/native-library integration would still need a significant Rust/C/C++ bridge and a separate GPU rendering strategy.
-
-Tauri remains attractive for ordinary desktop applications, but not as the default choice for this particular media workload.
-
-## Why not .NET / Avalonia
-
-Avalonia provides strong Windows/macOS UI support and could build a good application shell.
-
-However, RoboCam-Hub would still need native interoperability for GStreamer, NDI and likely the highest-performance rendering path. This adds managed/native lifetime, callback and frame-buffer boundaries to the most latency-sensitive part of the application.
-
-A .NET frontend over a native C++ media library is technically viable, but it is more architectural complexity than using Qt/QML directly over the same C++ core.
-
-## Why not separate native UIs
-
-Building WinUI/WPF on Windows and SwiftUI/AppKit on macOS would provide excellent native platform integration but approximately doubles UI work and testing.
-
-The product does not need radically different OS-native interaction models; it benefits more from one consistent show-control interface on both platforms.
-
-## Qt licensing warning
-
-Qt is dual licensed. Before production development begins, the project must deliberately choose and document either:
-
-- a Qt commercial licence; or
-- an LGPL-compliant Qt configuration and distribution model.
-
-Do not accidentally begin development under one Qt licensing route and assume it can later be changed without checking the applicable Qt terms.
-
-For a proprietary commercial RoboCam-Hub product, obtaining a Qt commercial Application Development licence may be the cleanest operational route, but the cost/terms should be checked before committing financially.
-
-This is a commercial/legal dependency, not a reason to choose a technically weaker framework.
-
-## NDI licensing warning
-
-The exact redistribution and commercial terms for the selected NDI SDK/runtime must be reviewed before release.
-
-Architecture should not assume that every SDK component can simply be bundled without complying with NDI's applicable licence agreement.
-
-## Threading model
-
-Indicative threading model:
+Example conceptually:
 
 ```text
-Main/UI Thread
-  Qt event loop + QML only
-
-Camera workers
-  independent GStreamer pipelines / callbacks
-
-Frame router
-  lock-minimised latest-frame ownership
-
-Render thread(s)
-  GPU View composition
-
-NDI sender workers
-  independent output timing/senders
-
-Background service workers
-  discovery
-  persistence/autosave
-  licensing refresh
-  diagnostics
+rch_engine_create()
+rch_engine_destroy()
+rch_camera_add(...)
+rch_camera_remove(...)
+rch_view_update(...)
+rch_output_update(...)
+rch_get_runtime_snapshot(...)
 ```
 
-No component should rely on one giant shared worker queue.
+C# can wrap this behind a clean service layer.
 
-## Memory/frame ownership
+High-frequency health/state events should be throttled/coalesced for UI consumption. Media-frame ownership remains native.
 
-Avoid copying full-resolution frames repeatedly between subsystems.
+## Threading
 
-Target principles:
+Indicative model:
 
-- decode into GPU-usable surfaces where practical;
-- reference latest complete frame rather than queueing many frames;
-- explicit frame lifetime ownership;
-- bounded queues at unavoidable asynchronous boundaries;
-- zero/low-copy paths benchmarked on both Windows and macOS;
-- CPU fallback path remains available if GPU interop is unstable.
+```text
+Avalonia UI thread
+  UI interaction only
 
-## Build system and dependency management
+.NET background services
+  persistence
+  licensing
+  low-frequency application coordination
 
-Use CMake as the top-level build system.
+Native camera/media workers
+  GStreamer ingest/decode
 
-CI should eventually produce separate signed build artifacts for Windows and macOS.
+Native frame router
+  latest-frame ownership
 
-Dependencies must use pinned/known versions rather than whatever is installed globally on a developer machine.
+Native render workers / GPU queues
+  View composition
 
-A reproducible dependency/package strategy is required for:
+Native NDI workers
+  independent senders
+```
 
-- Qt;
-- GStreamer;
-- NDI SDK;
-- JSON/archive library if not using Qt equivalents;
-- test frameworks;
-- crash reporting if later adopted.
+No camera, compositor or NDI workload may depend on the Avalonia UI thread remaining responsive.
+
+## Why not pure Avalonia/.NET media processing
+
+A fully managed implementation is not preferred because the hardest workload is native media processing and GPU/resource interoperability.
+
+Keeping that workload in C++:
+
+- matches GStreamer and NDI native APIs naturally;
+- makes frame lifetime ownership explicit;
+- avoids full-frame managed copies;
+- keeps the UI framework replaceable;
+- preserves a direct path for platform-specific GPU work;
+- makes one-session/one-decoder ownership easy to enforce centrally.
+
+## Why not Qt
+
+Qt remains technically capable, but commercial Qt licensing may add significant recurring/project cost for a proprietary product.
+
+Avalonia provides the cross-platform application UI under a more attractive open-source licensing model while the native C++ media core preserves the technical characteristics that originally made Qt/C++ appealing for the real-time path.
+
+The key requirement is therefore not that the whole application be C++; it is that **the media engine stays native and independent of the UI framework**.
+
+## Build and packaging
+
+Use:
+
+```text
+.NET build tooling  → Avalonia app
+CMake               → native media library
+```
+
+CI should produce integrated Windows and macOS application packages containing the correct native media library and permitted GStreamer/NDI runtime dependencies.
+
+Windows and macOS signing/notarisation requirements remain mandatory for release builds.
 
 ## First technical spike
 
-Before implementing the full product UI, build a cross-platform technical spike that proves the risky path.
+Before the full application UI is built, validate this architecture with a deliberately small Avalonia shell over the real native media engine.
 
-Minimum spike:
-
-```text
-4 RTSP cameras initially
-→ embedded GStreamer low-latency decode
-→ GPU 2×2 compositor
-→ local Qt preview
-→ one direct 1080p60 NDI High Bandwidth output
-```
-
-Then scale immediately to:
+Stage 1:
 
 ```text
-8 × 720p60 RTSP ingest
-2 × independent 2×2 Views
-2 × 1080p60 NDI High Bandwidth outputs
+1 camera
+→ one GStreamer RTSP session
+→ one decode pipeline
+→ native latest-frame state
+→ native compositor
+→ Avalonia local preview
+→ one native NDI output
 ```
 
-Run the same benchmark on:
+Then:
 
-- representative Windows touring laptop;
-- representative Apple Silicon Mac.
+```text
+4 cameras
+→ one session/decode each
+→ native 2×2 View
+→ Avalonia preview
+→ one 1080p60 NDI High Bandwidth output
+```
 
-The spike should measure end-to-end latency, CPU, GPU, memory, dropped frames, recovery behaviour and output freshness before the full editor is built.
+Then immediately validate the target workload:
+
+```text
+8 × 720p60 cameras
+→ exactly 8 RTSP sessions
+→ exactly 8 decode pipelines
+→ 2 independent 2×2 Views
+→ 2 × 1080p60 NDI High Bandwidth outputs
+```
+
+The same camera should also be deliberately placed into multiple Views during the spike to prove that the session/decode count remains unchanged.
+
+Run this on representative Windows and Apple Silicon hardware.
 
 ## Decision gate
 
-The Qt/C++ architecture is accepted provided the technical spike demonstrates that:
+The Avalonia + native C++ architecture is accepted provided the spike proves:
 
-- camera-to-local-preview latency remains near the proven GStreamer test path;
-- the compositor does not add unacceptable buffering;
-- clean frames can be delivered to NDI without application-window capture;
-- eight feeds and two NDI outputs are stable on representative hardware;
-- macOS performance is operationally comparable to Windows;
-- the Qt licensing route is commercially acceptable.
+- Avalonia can display the native View output with acceptable overhead;
+- no decoded frame has to make a full managed round-trip before NDI;
+- one configured camera remains one RTSP session and one decode pipeline regardless of consumer count;
+- camera-to-preview latency remains near the proven GStreamer path;
+- two independent NDI outputs can operate without opening duplicate camera streams;
+- eight-camera target load is stable;
+- Windows and macOS packaging is practical.
 
-If the spike fails specifically because Qt's render integration imposes unacceptable overhead, keep the C++/GStreamer/NDI core and replace only the compositor/rendering integration rather than restarting the whole product architecture.
+If Avalonia preview integration is the only weak point, retain the native C++ media core and replace only the local preview/UI interop technique rather than changing the camera/NDI architecture.
 
 ## Decisions adopted
 
-- C++20 is the primary implementation language.
-- Qt 6 + Qt Quick/QML is the selected cross-platform desktop UI framework.
-- CMake is the build system.
-- GStreamer is embedded directly into the application for camera ingest/decode.
-- NDI is integrated through the native SDK.
-- The media engine is separated from UI state and never blocks the UI thread.
-- Windows and macOS are first-class targets from the start.
+- Avalonia UI + C#/.NET is the selected desktop application/UI stack.
+- A native C++20 media core owns all real-time camera, decode, frame-routing, compositing and NDI functionality.
+- GStreamer is embedded directly in the native media core.
+- NDI is integrated natively.
+- One configured camera may have only one RoboCam-Hub RTSP session and one decoder pipeline.
+- Views and NDI Outputs share decoded frame state and never create their own camera connections.
+- Full-resolution media frames must not be routed through managed C# memory as the normal media path.
+- Local Avalonia preview is a consumer of native rendered View output and can never back-pressure camera/NDI processing.
+- Windows and macOS remain first-class targets.
 - Apple Silicon is the initial primary macOS architecture.
-- Clean View rendering is the source for NDI; application-window capture is prohibited.
-- A technical media-path spike precedes full application implementation.
+- A cross-platform technical spike precedes full product implementation.

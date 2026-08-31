@@ -19,54 +19,18 @@ The same `.rchshow` file must be portable between supported platforms. Platform-
 
 Cross-platform support is a first-architecture requirement rather than a future port.
 
-## Platform abstraction
-
-Platform-specific implementation should be isolated behind clear interfaces for:
-
-- NIC discovery and stable adapter identity;
-- secure credential and licence-token storage;
-- GStreamer packaging/runtime differences;
-- hardware decode backends;
-- NDI SDK integration details;
-- GPU/rendering backends;
-- fullscreen/window behaviour;
-- native file paths and application-data storage;
-- installers, code signing and application updates;
-- macOS signing and notarisation.
-
-The core camera, View, Output and Show data models should remain platform-independent.
-
-## Shared media architecture
-
-The preferred architecture remains conceptually common across Windows and macOS:
-
-```text
-RTSP Cameras
-    ↓
-GStreamer ingest/decode
-    ↓
-Latest-frame / frame-router state
-    ↓
-GPU compositor
-    ↓
-Clean View frame
-    ├─ Local application preview
-    └─ NDI sender
-```
-
-Framework and rendering choices must therefore be evaluated for native-quality support on both platforms.
-
 ## Licence model
 
 Initial commercial licensing model:
 
 - licence belongs to a user/customer entitlement;
-- one licence permits **two activated computers**;
+- one paid licence permits **two activated computers**;
 - the two computers may be any supported combination of Windows and macOS;
 - the licence is not tied to a Show;
-- Show files remain portable between licensed machines.
+- Show files remain portable between licensed machines;
+- a **7-day full-access trial** is available before purchase.
 
-A third simultaneous activation must not silently revoke another computer.
+A third simultaneous paid activation must not silently revoke another computer.
 
 ## Activation
 
@@ -89,18 +53,41 @@ After activation, the device receives a cryptographically signed local licence l
 
 No normal Show workflow should require the licence code to be repeatedly entered.
 
-## Two-device limit
+## Two-device enforcement
 
-When two devices are already activated, a third activation should display a clear message rather than automatically removing an existing device.
+Every successful paid licence validation must also confirm that the entitlement does not have more than two currently registered/active devices.
+
+Server-side activation state is authoritative.
+
+Expected behaviour:
+
+```text
+Licence validation
+      ↓
+Entitlement valid?
+      ↓
+Current device registered?
+      ↓
+Registered-device count <= 2?
+      ├─ Yes → issue/refresh 30-day lease
+      └─ No  → do not refresh lease; require licence-manager action
+```
+
+A third device must not be activated while two other devices are already registered.
+
+Suggested message:
 
 ```text
 This licence already has 2 activated computers.
 
-Deactivate an existing device in the RoboCam-Hub licence manager before activating this computer.
+Deactivate an existing device before activating this computer.
 
 [ Open Licence Manager ]
+[ Retry ]
 [ Cancel ]
 ```
+
+The licensing backend must prevent race conditions that could otherwise allow more than two devices to be activated simultaneously.
 
 ## Device identity
 
@@ -121,6 +108,8 @@ Conceptually:
 ```text
 Successful online validation
         ↓
+Confirm entitlement + registered-device count
+        ↓
 Licence valid until = server time + 30 days
         ↓
 App may run offline until that date
@@ -128,26 +117,11 @@ App may run offline until that date
 
 Whenever RoboCam-Hub has Internet connectivity, it should attempt to revalidate the licence in the background. A successful validation refreshes the local licence lease back to a full 30-day validity window.
 
-Example:
-
-```text
-1 Sep  — licence validates online
-         Offline validity → 1 Oct
-
-10 Sep — Internet available, validation succeeds
-         Offline validity → 10 Oct
-
-25 Sep — Internet available, validation succeeds
-         Offline validity → 25 Oct
-```
-
 The user does not need to manually refresh the licence during normal connected operation.
 
-## Offline behaviour
+## Offline startup behaviour
 
 While the signed local licence lease remains inside its 30-day validity period, RoboCam-Hub runs normally without Internet access.
-
-Internet availability is therefore not a runtime dependency for camera ingest, View rendering, NDI output, Show Mode or fullscreen monitoring.
 
 The normal startup sequence is:
 
@@ -165,7 +139,7 @@ Lease still valid?
 
 ## More than 30 days offline
 
-Once the local licence lease has expired, RoboCam-Hub must not enter normal application operation until the licence is successfully revalidated with the licensing server.
+Once the local paid-licence lease has expired, RoboCam-Hub must not enter normal application operation until the licence is successfully revalidated with the licensing server.
 
 Suggested screen:
 
@@ -175,87 +149,140 @@ ROBOCAM-HUB LICENCE REFRESH REQUIRED
 This computer has not validated its licence for more than 30 days.
 Connect to the Internet to refresh your licence.
 
-Last validated: 01 Sep 2026
-
 [ Retry Licence Check ]
-
-Network status: Offline
 ```
 
-When Internet access becomes available and the entitlement is still valid:
+When validation succeeds and the entitlement/device registration is still valid, a new 30-day lease is issued and the application can continue.
+
+## Licence expiry while the application is already running
+
+Licence validity is enforced at application startup, not by interrupting a currently running production session.
+
+If the paid licence becomes invalid, expires, is revoked, or the 30-day offline lease expires while RoboCam-Hub is already running:
+
+- **do not stop or disable the application during that session**;
+- do not stop camera ingest;
+- do not stop View rendering;
+- do not stop NDI Outputs;
+- do not force the application to close;
+- show a clear persistent warning that the licence will require attention before the next application launch/restart.
+
+Example warning:
 
 ```text
-Licence validated successfully.
-Offline access renewed for 30 days.
+Licence validation required
 
-[ Continue ]
+RoboCam-Hub will continue to operate for this session.
+The licence must be refreshed before the application can be started again.
+
+[ Check Licence Now ]
 ```
 
-The user should not need to re-enter the licence code unless the local activation itself has been removed, corrupted or explicitly deactivated.
+If the user restores a valid licence during the current session, the warning clears and the new lease is stored normally.
 
-## Behaviour if licence entitlement is no longer valid
+This behaviour is intentional: licensing must never become a live-show failure mode.
 
-If the licence server reports that the entitlement has expired, been revoked or otherwise become invalid, RoboCam-Hub should not refresh the local lease.
+## 7-day full-access trial
 
-The application should clearly distinguish this from an Internet/connectivity failure.
+RoboCam-Hub should provide a **7-day full-access evaluation trial** so a prospective user can test the real product with their own camera, NDI and grandMA3 environment.
 
-Examples:
+The trial should include the normal core functionality, including:
+
+- camera discovery and manual add;
+- low-latency RTSP ingest;
+- up to the normal supported camera count;
+- View creation and editing;
+- Show save/load;
+- Show Mode;
+- fullscreen monitoring;
+- NDI output;
+- normal diagnostics and network configuration.
+
+The trial should not artificially watermark the NDI output or remove core features that are required to evaluate latency and production suitability.
+
+Suggested first-run licensing screen:
 
 ```text
-Cannot reach licence server
+ROBOCAM-HUB
+
+[ Start 7-Day Full Trial ]
+[ Activate Licence ]
 ```
 
-versus:
+## Trial activation and timing
+
+The 7-day period should be server-authoritative.
+
+Recommended model:
+
+1. user requests the trial while online;
+2. licensing service creates a trial entitlement/start timestamp;
+3. server returns a signed local trial token containing the expiry;
+4. the application may operate offline until the signed trial expiry;
+5. changing the local system clock must not trivially restart or extend the trial.
+
+The trial should be a genuine seven calendar days from activation rather than seven launches or seven usage days.
+
+## Trial expiry while running
+
+Trial expiry follows the same live-production rule as paid-licence expiry.
+
+If the seven-day trial reaches its expiry while RoboCam-Hub is already running:
+
+- the current application session continues normally;
+- camera and NDI operation continue;
+- a clear warning is shown;
+- the next application launch requires a paid activation before normal operation can continue.
+
+Example:
 
 ```text
-Licence is no longer active
+Your RoboCam-Hub trial has ended.
+
+This session will continue normally.
+A licence is required the next time RoboCam-Hub starts.
+
+[ Buy / Activate Licence ]
 ```
 
-The latter may provide a link to the future account/licence website.
+## Trial to paid conversion
 
-## Do not interrupt a currently running show
+Purchasing/activating a paid licence after or during the trial must preserve:
 
-The 30-day validity check controls whether a new normal application session may start.
+- Shows;
+- Views;
+- camera configuration;
+- machine NIC mappings;
+- templates;
+- application settings.
 
-RoboCam-Hub must not terminate camera ingest or NDI output merely because the local lease reaches its expiry time while the application is already running.
-
-If a lease expires during an active session:
-
-- show a clear warning;
-- continue the current application session;
-- continue camera ingest, View rendering and NDI output;
-- require successful online revalidation before the next normal application launch.
-
-This prevents a licence timer from becoming a live-show failure mode.
+The user should not need to reinstall RoboCam-Hub or recreate their setup.
 
 ## Clock and tamper handling
 
-The 30-day policy must not rely only on the user's editable local wall clock.
+Paid and trial validity must not rely only on the user's editable local wall clock.
 
-The licence token should contain server-issued signed timestamps, including the current lease expiry. The client should use reasonable anti-rollback protection so manually changing the computer clock cannot trivially extend a licence indefinitely.
+Licence/trial tokens should contain signed server-issued timestamps. The client should use reasonable anti-rollback protection so manually changing the computer clock cannot trivially extend a licence or restart a trial.
 
-The implementation should favour predictable user recovery over aggressive hardware DRM. If clock state appears invalid, require an online revalidation rather than permanently locking the installation.
+If clock state appears suspicious, require online validation rather than permanently locking the installation.
 
-## Background refresh behaviour
+## Background paid-licence refresh behaviour
 
-When Internet is available, licence refresh should be lightweight and unobtrusive.
+When Internet is available, paid licence refresh should be lightweight and unobtrusive.
 
 Recommended behaviour:
 
 - attempt refresh shortly after application startup;
-- refresh asynchronously without delaying media startup when the existing lease is valid;
-- retry occasionally while connected if the first check fails;
-- do not repeatedly hammer the service;
-- a temporary licensing API outage does not make an otherwise valid 30-day lease unusable;
-- successful validation immediately replaces the previous local lease with a newly signed 30-day lease.
-
-Exact retry intervals are an implementation detail and should include backoff.
+- refresh asynchronously when the existing lease is valid;
+- verify entitlement validity and registered-device count on every successful server check;
+- retry occasionally with backoff if the service is temporarily unreachable;
+- successful validation replaces the previous local lease with a new signed 30-day lease.
 
 ## Licence status UI
 
-Settings should expose enough information for the user to understand their offline state.
+Settings should expose enough information for the user to understand their licence state.
 
-Example:
+Paid example:
 
 ```text
 Settings → Account / Licence
@@ -270,147 +297,122 @@ Offline Until:    10 Oct 2026
 [ Manage Licence Online ]
 ```
 
-As expiry approaches, the application may show a non-blocking warning, for example at seven days remaining, so touring users have time to connect the machine before it becomes unusable on the next launch.
+Trial example:
+
+```text
+Licence:          7-Day Trial
+Trial Ends:       07 Sep 2026
+Time Remaining:   4 days
+
+[ Buy / Activate Licence ]
+```
 
 ## Local deactivation
 
 Settings should provide the ability to release the current computer's activation.
 
-Successful deactivation releases the device slot on the server and removes the local activation token.
+Successful deactivation releases the device slot on the server and removes the local paid activation token.
 
-If the computer is offline when the user requests deactivation, the exact behaviour should be handled conservatively; do not pretend the server slot has been released when it has not.
+If the computer is offline when deactivation is requested, do not claim the server slot has been released until the server has actually confirmed it.
 
 ## Future web licence manager
 
-The marketing / purchase website will later include an authenticated customer licence manager.
-
-Expected capabilities include:
+The future marketing/purchase website should provide an authenticated licence manager with at least:
 
 - purchase RoboCam-Hub;
-- customer account sign-in;
-- view licence entitlement/status;
+- sign in to customer account;
+- view licence/trial status;
 - view activated devices;
 - show device name and platform;
-- show activation / last-validation information;
-- remotely deactivate a lost, broken or inaccessible device;
-- manage billing/renewal if the eventual commercial model requires it;
+- show activation and last-validation information;
+- remotely deactivate a lost/replaced machine;
+- show available activation slots;
 - download Windows and macOS installers;
-- access invoices/receipts where appropriate.
+- manage billing/renewal if required by the final commercial model.
 
-The website itself is a later workstream. Its required API boundary should nevertheless be considered when the desktop licence client is designed.
+The website is a later workstream, but the licensing API and entitlement data model must support this from the start.
 
-## Licensing service boundary
+## Licensing service responsibilities
 
-Licensing should be architecturally separate from the real-time media engine.
-
-```text
-Desktop App
-├─ Camera/GStreamer engine
-├─ View compositor
-├─ NDI engine
-├─ Show persistence
-└─ Licence client
-       ↓ periodic HTTPS validation
-Licensing API
-       ↓
-Customer / entitlement database
-       ↓
-Future purchase + licence-management website
-```
-
-Camera ingest, composition and NDI do not require continuous availability of the licensing API while the local lease is valid.
-
-## Server responsibilities
-
-The future licensing backend will likely need to manage:
+The backend needs to manage:
 
 - customers/users;
-- licence entitlements;
+- paid licence entitlements;
+- trial entitlements;
 - two-device activation limit;
 - registered devices;
-- activation and deactivation;
+- activation/deactivation;
 - remote device deactivation;
-- signed 30-day licence lease issuance;
-- lease refresh/revalidation;
+- signed 30-day paid licence leases;
+- signed 7-day trial leases;
 - entitlement revocation;
-- billing/subscription state if later required;
-- audit history for licence actions.
+- device-count enforcement on validation;
+- audit history;
+- billing/subscription state if required later.
 
-Privileged signing secrets must remain server-side and must never ship inside the desktop application.
+Privileged signing secrets must remain server-side.
 
 ## Security principles
 
 At minimum:
 
 - HTTPS/TLS for licensing API communication;
-- cryptographically signed local licence leases;
-- desktop validation using an embedded public verification key rather than a server signing secret;
-- server-authoritative lease expiry timestamps;
-- platform-secure local token storage where practical;
-- reasonable local clock rollback/tamper detection;
-- rate limiting and abuse controls on activation endpoints;
+- cryptographically signed local licence/trial leases;
+- desktop validation using an embedded public verification key rather than the server signing secret;
+- server-authoritative lease and trial expiry timestamps;
+- platform-secure local token storage;
+- reasonable clock rollback/tamper detection;
+- atomic server-side enforcement of the two-device limit;
+- rate limiting and abuse controls;
 - collect the minimum machine information required for device identity;
 - assume the desktop client can eventually be reverse engineered;
 - never send camera credentials to the licensing service.
 
-## Cross-platform validation
-
-Both platforms must be tested for:
-
-- Profile 2 RTSP ingest;
-- UDP and TCP ingest;
-- eight simultaneous 720p60 cameras;
-- low-latency decode behaviour;
-- GPU composition;
-- multiple simultaneous 1080p60 NDI High Bandwidth outputs;
-- NIC discovery and stable identity;
-- USB / Thunderbolt Ethernet removal and reconnection;
-- fullscreen monitoring;
-- autosave and crash recovery;
-- secure local credential and licence storage;
-- code signing and packaged runtime dependencies.
-
 ## Licensing acceptance tests
 
-- activate one licence on two computers in any supported Windows/macOS combination;
-- reject a third simultaneous activation cleanly;
-- issue a signed local 30-day lease after successful validation;
-- launch normally with no Internet while that lease remains valid;
-- successfully validate online and reset the offline window to 30 days from that validation;
-- automatically refresh a valid licence in the background when Internet is available;
-- refuse normal app startup after more than 30 days without a successful validation;
-- allow the user to connect to the Internet, refresh the licence and immediately continue;
-- distinguish licence-server connectivity failure from an invalid/revoked entitlement;
-- do not terminate a currently running media session if its lease crosses the expiry point;
-- require validation on the next launch after such an expiry;
-- tolerate temporary licensing-server outage while the existing local lease remains valid;
-- change USB/Thunderbolt network adapters without consuming another activation;
-- detect obvious system-clock rollback and request online validation rather than extending the lease;
-- deactivate one computer and activate a replacement.
+- activate one paid licence on two computers in any Windows/macOS combination;
+- reject a third simultaneous activation;
+- verify every paid online licence check confirms the device-count limit;
+- issue a signed 30-day lease after successful paid validation;
+- run offline while that lease remains valid;
+- refresh the lease back to 30 days after a later successful check;
+- refuse a new app session after the lease has expired until online validation succeeds;
+- allow a currently running session to continue unchanged if the licence expires or is revoked while running;
+- show a warning that the next restart will require licence validation;
+- start a 7-day full-access trial;
+- verify the trial has full core camera/View/NDI functionality;
+- run the trial offline within its signed seven-day period;
+- allow a running session to continue if the trial expires mid-session;
+- block the next normal launch after trial expiry until a paid licence is activated;
+- convert trial to paid without losing Shows/settings;
+- deactivate one device and activate a replacement;
+- remotely deactivate a device through the licence-management API;
+- change USB/Thunderbolt NICs without consuming another activation;
+- detect obvious local-clock rollback and require online validation.
 
 ## Decisions adopted
 
-- RoboCam-Hub will support both Windows and macOS.
-- Cross-platform support influences the first architecture and framework choice.
-- The portable Show format is shared between Windows and macOS.
-- One licence allows a maximum of two simultaneously activated computers.
-- Activation slots are platform-agnostic.
-- Licensing is associated with the user/customer entitlement, not individual Shows.
-- Initial activation requires access to the licensing service.
-- A successful licence-server check grants **30 days of offline use**.
-- Every successful later licence-server check resets the offline validity period back to **30 days from that check**.
-- While the local lease is valid, loss of Internet does not restrict normal application operation.
-- After more than 30 days without a successful validation, the application will not enter normal operation until it connects to the licensing service and refreshes the licence.
-- Licence expiry while the application is already running will not terminate an active show; revalidation is required before the next launch.
-- The current device can be deactivated locally.
-- The future marketing/purchase website will include a web licence manager with remote device deactivation.
-- Website implementation is a later phase, but the desktop licensing architecture must support it from the beginning.
+- RoboCam-Hub supports Windows and macOS from the first architecture.
+- One paid licence allows a maximum of two registered/activated computers.
+- Every successful paid licence check verifies the server-side registered-device count before issuing a new lease.
+- A third device cannot activate while two device slots are already occupied.
+- Successful paid validation grants 30 days of offline operation.
+- Every later successful paid validation resets the offline validity period to 30 days.
+- Once the 30-day lease has expired, a new application session requires Internet access and successful validation.
+- If a paid licence becomes invalid while the application is already running, the current session continues fully and only the next restart is blocked; the user is warned clearly.
+- RoboCam-Hub includes a **7-day full-access trial**.
+- Trial expiry while the application is already running does not interrupt that session; the next launch requires paid activation.
+- Trial-to-paid conversion preserves all user Shows and settings.
+- Licensing is never allowed to interrupt live media operation mid-session.
+- The future marketing/purchase website includes a web licence manager with device management and remote deactivation.
 
 ## Still to decide later
 
 1. Perpetual licence, subscription licence or another commercial pricing model.
 2. Whether activation uses licence code only, account login, or both.
-3. Custom licensing backend versus a suitable third-party licensing platform.
-4. Whether Intel macOS devices are formally supported or Apple Silicon only.
-5. Desktop application update mechanism.
-6. Final web purchase/billing stack.
+3. Whether a trial requires account creation, email verification, payment method, or licence-code-style trial token.
+4. Whether the trial may be activated on one or two devices.
+5. Custom licensing backend versus a suitable third-party licensing platform.
+6. Whether Intel macOS devices are formally supported or Apple Silicon only.
+7. Desktop application update mechanism.
+8. Final web purchase/billing stack.

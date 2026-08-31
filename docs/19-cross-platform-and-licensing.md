@@ -4,7 +4,9 @@
 
 Define the cross-platform requirement and initial licensing model for RoboCam-Hub.
 
-RoboCam-Hub must support both Windows and macOS. A purchased licence is user-based and allows up to two activated computers at the same time. A 7-day free trial is also part of the initial commercial model.
+RoboCam-Hub must support both Windows and macOS. A purchased licence is assigned to a user/customer and allows up to two activated computers at the same time.
+
+The marketing, purchase and web licence-management website is a later implementation phase, but the desktop application must be architected around this licensing model from the beginning.
 
 ## Platform requirement
 
@@ -13,28 +15,89 @@ Initial supported desktop platforms:
 - Windows;
 - macOS.
 
-The same `.rchshow` file should open on either platform, with only machine-specific items such as NIC mappings needing to be resolved locally.
+The same `.rchshow` file must be portable between supported platforms. Platform-specific machine settings such as physical NIC mappings remain local to each computer.
 
-Platform-specific code should be isolated behind clear interfaces for:
+Example:
+
+```text
+Show
+├─ Camera Network A
+└─ NDI Network A
+
+Windows touring laptop
+├─ Camera Network A → USB Ethernet Adapter #2
+└─ NDI Network A    → Intel I225
+
+MacBook
+├─ Camera Network A → USB / Thunderbolt Ethernet
+└─ NDI Network A    → second Ethernet interface
+```
+
+Cross-platform support is a first-architecture requirement rather than a future port.
+
+## Platform abstraction
+
+Platform-specific implementation should be isolated behind clear interfaces for:
 
 - NIC discovery and stable adapter identity;
-- secure credential/licence-token storage;
+- secure credential and licence-token storage;
 - GStreamer packaging/runtime differences;
+- hardware decode backends;
 - NDI SDK integration details;
 - GPU/rendering backends;
-- installers, signing and notarisation;
-- platform application-data/file locations.
+- fullscreen/window behaviour;
+- native file paths and application-data storage;
+- installers, code signing and application updates;
+- macOS signing and notarisation.
 
-Cross-platform support is a hard architectural requirement and must influence the first implementation choices rather than being added later.
+The core camera, View, Output and Show data models should remain platform-independent.
 
-## Licensing model
+## Shared media architecture
 
-Initial commercial model:
+The preferred architecture remains conceptually common across Windows and macOS:
 
-- licence belongs to a user/customer account;
-- one purchased licence allows **two activated computers**;
-- the two devices may be any supported combination of Windows and macOS;
-- licence is not tied to a particular Show;
+```text
+RTSP Cameras
+    ↓
+GStreamer ingest/decode
+    ↓
+Latest-frame / frame-router state
+    ↓
+GPU compositor
+    ↓
+Clean View frame
+    ├─ Local application preview
+    └─ NDI sender
+```
+
+Framework and rendering choices must therefore be evaluated for native-quality support on both platforms.
+
+## Cross-platform validation
+
+Both platforms must be tested for:
+
+- Profile 2 RTSP ingest;
+- UDP and TCP ingest;
+- eight simultaneous 720p60 cameras;
+- low-latency decode behaviour;
+- software and practical hardware decode paths;
+- GPU composition;
+- multiple simultaneous 1080p60 NDI High Bandwidth outputs;
+- NIC discovery and stable identity;
+- USB / Thunderbolt Ethernet removal and reconnection;
+- fullscreen monitoring;
+- autosave and crash recovery;
+- secure local credential storage;
+- code signing and packaged runtime dependencies.
+
+## Licence model
+
+Initial commercial licensing model:
+
+- licence belongs to a user/customer entitlement;
+- one licence permits **two activated computers**;
+- the two computers may be any supported combination of Windows and macOS;
+- the licence is not tied to a Show;
 - Show files remain portable between licensed machines.
 
 Example:
@@ -46,16 +109,16 @@ User Account
    └─ Backup MacBook — macOS
 ```
 
-A third activation should not silently evict another device. The user should be directed to the licence manager to deactivate an existing machine first.
+A third simultaneous activation must not silently revoke another computer.
 
-## Licence activation
+## Activation
 
-A human-readable licence code may be provided, but the backend customer account and entitlement record should remain authoritative.
+The user should be able to activate RoboCam-Hub with a licence code or equivalent entitlement flow supplied by the future purchase system.
 
-Suggested activation flow:
+Conceptually:
 
 ```text
-Activate RoboCam-Hub
+ACTIVATE ROBOCAM-HUB
 
 Licence Code
 [ XXXX-XXXX-XXXX-XXXX ]
@@ -63,144 +126,124 @@ Licence Code
 [ Activate ]
 ```
 
-On successful activation, the service registers the local device and returns a signed local licence lease/token stored using platform-secure storage.
+The backend entitlement remains authoritative even if a human-readable licence code is used.
 
-## 7-day free trial
+After activation, the device should receive a signed local licence token/lease stored securely on that computer.
 
-RoboCam-Hub should offer a **7-day free trial**.
+No normal Show workflow should require the licence code to be repeatedly entered.
 
-The trial should provide the real application experience rather than a crippled demo so users can validate it with their own camera/NDI setup before purchasing.
+## Two-device limit
 
-Recommended trial behaviour:
+When two devices are already activated, a third activation should display a clear message rather than automatically removing an existing device.
 
-- 7 calendar days from first successful trial activation;
-- one trial entitlement per user/account, with reasonable anti-abuse controls;
-- full core functionality during the trial, including camera ingest, View editing, Show Mode, NDI output and Show save/load;
-- no artificial watermark on NDI output;
-- no shortened runtime/session limit;
-- clear trial status and remaining time in the UI;
-- conversion to a paid licence should preserve existing Shows and settings.
-
-Suggested first-run UI:
+Example:
 
 ```text
-RoboCam-Hub
+This licence already has 2 activated computers.
 
-[ Start 7-Day Free Trial ]
-[ Activate Licence ]
+Deactivate an existing device in the RoboCam-Hub licence manager before activating this computer.
 
-Already purchased? Enter your licence code.
+[ Open Licence Manager ]
+[ Cancel ]
 ```
 
-During the trial:
-
-```text
-Trial Active — 5 days remaining
-```
-
-Near expiry, show a non-blocking reminder rather than interrupting normal operation.
-
-## Trial expiry
-
-Trial enforcement must respect live-production reliability.
-
-The application should never abruptly terminate an active NDI output or camera session in the middle of a running show simply because the trial clock expires while the application is already open.
-
-Recommended policy:
-
-- trial validity is checked at launch and periodically in the background;
-- if the trial expires during a running session, show a clear warning and allow the current session to continue;
-- the next clean application launch requires purchase/activation before normal production use continues;
-- existing Show files remain accessible and are never deleted or corrupted because a trial expired.
-
-Exact post-trial restrictions can be refined later, but active-show continuity is mandatory.
-
-## Offline touring requirement
-
-The purchased application must remain usable without continuous Internet access.
-
-Recommended model:
-
-1. online activation;
-2. signed local licence lease stored securely;
-3. operation offline for a substantial grace period;
-4. background refresh when Internet becomes available;
-5. failure to reach the licensing API never immediately stops an active show.
-
-A starting design target is approximately 30 days between successful paid-licence refreshes, subject to later security/commercial review.
-
-For the 7-day trial, the trial start timestamp and entitlement should similarly be server-authoritative at creation, with a signed local trial token enabling expected offline use during the trial period.
+This makes activation predictable for touring users who may intentionally maintain a primary and backup machine.
 
 ## Device identity
 
-Use a stable local installation/device ID plus limited platform fingerprinting where necessary. Avoid invasive or fragile hardware locking.
+Licence activation needs a stable local device identity.
 
-Do not use only:
+Do not use a removable NIC or MAC address as the sole identity because users may frequently change USB Ethernet adapters, Thunderbolt docks and network hardware.
 
-- MAC address;
-- IP address;
-- hostname;
-- removable NIC identity;
-- any single easily changed hardware property.
+The implementation should use a privacy-conscious installation/device identity with limited platform fingerprinting where useful.
 
-Users must be able to recover from hardware replacement or OS reinstall through the account portal.
+Changing venue networking or swapping a USB NIC must not consume a new activation.
 
-## Account / Licence UI
+## Offline operation
 
-Settings should contain an `Account / Licence` section.
+RoboCam-Hub is intended for live-event environments where Internet connectivity may be unavailable or unreliable.
 
-Paid example:
+A valid activated installation must therefore continue to work offline.
+
+Recommended model:
+
+1. initial activation requires a connection to the licensing service;
+2. the service returns a cryptographically signed local licence lease/token;
+3. the application validates that token locally;
+4. periodic online revalidation refreshes the entitlement when Internet is available;
+5. temporary lack of Internet does not prevent normal operation while the local licence remains valid.
+
+The exact offline revalidation period is a later commercial/security decision, but it should be generous enough for touring. A very short daily-style online requirement is inappropriate.
+
+## Never interrupt an active show
+
+A temporary licensing-server failure or loss of Internet must not abruptly stop an already running production session.
+
+In particular it must not immediately stop:
+
+- camera ingest;
+- View rendering;
+- NDI Outputs;
+- fullscreen monitoring.
+
+Licence problems should be surfaced at startup or in Settings in a controlled way. Active media output should not be dependent on continuous server connectivity.
+
+## Local deactivation
+
+Settings should provide a licence area with the ability to release the current computer's activation.
+
+Example:
 
 ```text
-Licence:        Active
-Devices:        1 of 2 used
-Last Checked:   3 days ago
-Offline Until:  28 Sep 2026
+Settings → Licence
 
-[ Manage Licence ]
-[ Refresh Licence ]
+Licence: Active
+Devices: 2 of 2
+
 [ Deactivate This Computer ]
+[ Manage Licence Online ]
 ```
 
-Trial example:
-
-```text
-Licence:        Free Trial
-Time Remaining: 5 days
-Trial Ends:     05 Sep 2026
-
-[ Buy RoboCam-Hub ]
-```
-
-Normal operation should not be cluttered with licensing information unless action is required.
+Successful deactivation releases the device slot on the server.
 
 ## Future web licence manager
 
-The later marketing/purchase website should include an authenticated licence-management area.
+The marketing / purchase website will later include an authenticated customer licence manager.
 
-Expected scope:
+Expected capabilities include:
+
+- purchase RoboCam-Hub;
+- customer account sign-in;
+- view licence entitlement/status;
+- view activated devices;
+- show device name and platform;
+- show activation / last-validation information;
+- remotely deactivate a lost, broken or inaccessible device;
+- manage billing/renewal if the eventual commercial model requires it;
+- download Windows and macOS installers;
+- access invoices/receipts where appropriate.
+
+Example:
 
 ```text
-Account
-├─ Profile
-├─ Purchases / Billing
-├─ RoboCam-Hub Licence
-│  ├─ Status
-│  ├─ Trial / Purchase history
-│  ├─ Devices — maximum 2 paid activations
-│  └─ Deactivate Device
-└─ Downloads
-   ├─ Windows
-   └─ macOS
+ROBOCAM-HUB LICENCE
+
+Devices: 2 / 2
+
+Tour-Laptop
+Windows
+[ Deactivate ]
+
+Ben-MacBook
+macOS
+[ Deactivate ]
 ```
 
-The portal should eventually allow users to view active devices, deactivate lost/replaced machines, see licence/trial status and download installers.
-
-Website implementation is a later workstream, but the licensing API should be designed for both the desktop app and future web portal from the beginning.
+The website itself is a later workstream. Its required API boundary should nevertheless be considered when the desktop licence client is designed.
 
 ## Licensing service boundary
 
-Licensing is a separate service from the media engine.
+Licensing should be architecturally separate from the real-time media engine.
 
 ```text
 Desktop App
@@ -214,62 +257,87 @@ Licensing API
        ↓
 Customer / entitlement database
        ↓
-Future account/licence website
+Future purchase + licence-management website
 ```
 
-Camera ingest, composition and NDI must not depend on continuous server connectivity.
+Camera ingest, composition and NDI must not require continuous availability of the licensing API.
+
+## Server responsibilities
+
+The future licensing backend will likely need to manage:
+
+- customers/users;
+- licence entitlements;
+- activation limit;
+- registered devices;
+- activation and deactivation;
+- remote device deactivation;
+- signed licence token issuance;
+- token refresh/revalidation;
+- entitlement revocation;
+- billing/subscription state if later required;
+- audit history for licence actions.
+
+Privileged signing secrets must remain server-side and must never ship inside the desktop application.
 
 ## Security principles
 
-- HTTPS-only licensing API;
-- server-authoritative activation and trial state;
-- signed local trial/licence leases;
-- platform-secure token storage;
-- no embedded master licence secret in the client;
-- activation rate limiting and abuse controls;
-- auditable activation/deactivation events;
-- licence reset/reissue capability;
-- assume the desktop client can be reverse engineered.
+At minimum:
 
-## Cross-platform implementation implications
+- HTTPS/TLS for licensing API communication;
+- cryptographically signed local licence tokens;
+- desktop validation using an embedded public verification key rather than a server signing secret;
+- platform-secure local token storage where practical;
+- rate limiting and abuse controls on activation endpoints;
+- collect the minimum machine information required for device identity;
+- assume the desktop client can eventually be reverse engineered;
+- never send camera credentials to the licensing service.
 
-Before selecting the desktop framework, evaluate candidates against:
+## Packaging implications
 
-- first-class Windows and macOS support;
-- embedded GStreamer control;
-- native NDI SDK access;
-- high-performance GPU video surfaces;
-- free-form editor performance;
-- multi-NIC enumeration;
-- code signing and update distribution;
-- Apple Developer ID signing/notarisation;
-- secure local credential/token storage;
-- keeping media processing off the UI thread.
+Windows distribution requires a signed native application/installer and a suitable update mechanism if automatic updates are adopted.
+
+macOS distribution requires a signed application, Apple notarisation and an appropriate DMG/PKG or equivalent delivery path. Apple Silicon should be treated as a primary macOS target.
+
+Whether older Intel Macs are formally supported should be decided after dependency and performance testing rather than assumed.
 
 ## Initial acceptance tests
 
 - open the same `.rchshow` on Windows and macOS;
-- remap logical camera/NDI network roles independently on both platforms;
-- ingest supported Profile 2 camera feeds on both platforms;
-- publish NDI on both platforms;
-- activate one paid licence on two machines in any Windows/macOS combination;
-- reject a third simultaneous paid activation cleanly;
-- deactivate one machine and activate another;
-- start a 7-day free trial;
-- retain full core app functionality during the trial;
-- convert trial to paid without losing Shows/settings;
-- handle trial expiry without stopping an already running show;
-- run a paid licence offline under a valid local lease;
-- survive licensing API outage without disrupting active camera/NDI operation;
-- follow Auto/Light/Dark system theme behaviour on both platforms.
+- independently map logical camera/NDI network roles on each platform;
+- ingest supported camera streams on Windows and macOS;
+- publish NDI on Windows and macOS;
+- activate one licence on a Windows computer;
+- activate the same licence on a Mac;
+- confirm both consume the two available device slots;
+- reject a third simultaneous activation cleanly;
+- deactivate one computer and activate a replacement;
+- remotely deactivate a device through a test licence-management API;
+- remain operational offline after valid activation;
+- survive temporary licence-server outage without interrupting active media;
+- change USB/Thunderbolt network adapters without consuming another activation;
+- update/reinstall within defined rules without accidental duplicate activation.
 
 ## Decisions adopted
 
-- RoboCam-Hub targets Windows and macOS from the first architecture.
-- One paid licence allows two simultaneously activated computers.
-- Activation slots are platform-agnostic.
-- RoboCam-Hub offers a 7-day free trial.
-- Trial should expose the real core product rather than a restricted demo.
-- Trial expiry must never abruptly stop an active show session.
-- A future web licence manager will be part of the marketing/purchase website.
-- Desktop operation must tolerate extended loss of Internet connectivity after valid activation.
+- RoboCam-Hub will support both Windows and macOS.
+- Cross-platform support influences the first architecture and framework choice.
+- The portable Show format is shared between Windows and macOS.
+- One licence allows a maximum of two simultaneously activated computers.
+- Activation slots are platform-agnostic: any supported Windows/macOS combination is valid.
+- Licensing is associated with the user/customer entitlement, not individual Shows.
+- The application must remain usable offline after successful activation for a suitable touring-friendly period.
+- Temporary Internet or licence-server loss must not immediately interrupt an active show.
+- The current device can be deactivated locally.
+- The future marketing/purchase website will include a web licence manager with remote device deactivation.
+- Website implementation is a later phase, but the desktop licensing architecture must support it from the beginning.
+
+## Still to decide later
+
+1. Perpetual licence, subscription licence or another commercial pricing model.
+2. Exact offline validation/grace period.
+3. Whether activation uses licence code only, account login, or both.
+4. Custom licensing backend versus a suitable third-party licensing platform.
+5. Whether Intel macOS devices are formally supported or Apple Silicon only.
+6. Desktop application update mechanism.
+7. Final web purchase/billing stack.

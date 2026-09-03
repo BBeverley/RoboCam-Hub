@@ -49,3 +49,20 @@ Start with:
 **Planning / technical validation.**
 
 A low-latency GStreamer RTSP workflow has already been proven against RoboSpot camera feeds and can get substantially closer to RoboSpot BaseStation latency than generic OBS RTSP ingest. The next validation step is to prove the complete RTSP → compositor → NDI → grandMA3 chain and measure the latency budget at each stage.
+
+## Gate 0 build and test
+
+Gate 0 validation requires the .NET 10 SDK, CMake 3.25 or newer and a C/C++ toolchain. These commands are the local equivalents of CI:
+
+```shell
+cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build native/build --config Release --parallel
+ctest --test-dir native/build --build-config Release --output-on-failure
+
+dotnet restore RoboCamHub.slnx
+dotnet build RoboCamHub.slnx --configuration Release --no-restore --warnaserror
+dotnet test tests/managed/RoboCamHub.Domain.Tests/RoboCamHub.Domain.Tests.csproj --configuration Release --no-build --no-restore
+dotnet test tests/managed/RoboCamHub.NativeInterop.Tests/RoboCamHub.NativeInterop.Tests.csproj --configuration Release --no-build --no-restore
+```
+
+The managed build invokes CMake to stage `robocamhub_native` beside the NativeInterop test assembly, so the final test command exercises the real C ABI library on the current platform.

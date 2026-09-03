@@ -7,6 +7,8 @@
     <IsPackable>false</IsPackable>
     <NativeSourceDirectory>$(MSBuildProjectDirectory)/../../../native</NativeSourceDirectory>
     <NativeBuildDirectory>$(BaseIntermediateOutputPath)native/$(Configuration)</NativeBuildDirectory>
+    <NativeConfigureArguments>-DBUILD_TESTING=OFF</NativeConfigureArguments>
+    <NativeConfigureArguments Condition="'$(OS)' != 'Windows_NT'">$(NativeConfigureArguments) -DCMAKE_BUILD_TYPE=$(Configuration)</NativeConfigureArguments>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,7 +27,7 @@
   </ItemGroup>
 
   <Target Name="BuildNativeLibrary" BeforeTargets="Build">
-    <Exec Command="cmake -S &quot;$(NativeSourceDirectory)&quot; -B &quot;$(NativeBuildDirectory)&quot; -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=$(Configuration)" />
+    <Exec Command="cmake -S &quot;$(NativeSourceDirectory)&quot; -B &quot;$(NativeBuildDirectory)&quot; $(NativeConfigureArguments)" />
     <Exec Command="cmake --build &quot;$(NativeBuildDirectory)&quot; --config $(Configuration) --parallel" />
 
     <ItemGroup>

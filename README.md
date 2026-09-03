@@ -55,7 +55,7 @@ A low-latency GStreamer RTSP workflow has already been proven against RoboSpot c
 Gate 0 validation requires the .NET 10 SDK, CMake 3.25 or newer and a C/C++ toolchain. These commands are the local equivalents of CI:
 
 ```shell
-cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake -S native -B native/build -DBUILD_TESTING=ON
 cmake --build native/build --config Release --parallel
 ctest --test-dir native/build --build-config Release --output-on-failure
 

@@ -42,7 +42,7 @@ jobs:
           cmake --version
 
       - name: Configure native CMake project
-        run: cmake -S native -B native/build-ci -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+        run: cmake -S native -B native/build-ci -DBUILD_TESTING=ON
 
       - name: Build native library and tests
         run: cmake --build native/build-ci --config Release --parallel

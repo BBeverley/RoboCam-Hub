@@ -5,6 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <NativeSourceDirectory>$(MSBuildProjectDirectory)/../../../native</NativeSourceDirectory>
+    <NativeBuildDirectory>$(BaseIntermediateOutputPath)native/$(Configuration)</NativeBuildDirectory>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,5 +23,22 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\RoboCamHub.NativeInterop\RoboCamHub.NativeInterop.csproj" />
   </ItemGroup>
+
+  <Target Name="BuildNativeLibrary" BeforeTargets="Build">
+    <Exec Command="cmake -S &quot;$(NativeSourceDirectory)&quot; -B &quot;$(NativeBuildDirectory)&quot; -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=$(Configuration)" />
+    <Exec Command="cmake --build &quot;$(NativeBuildDirectory)&quot; --config $(Configuration) --parallel" />
+
+    <ItemGroup>
+      <_BuiltNativeLibrary Include="$(NativeBuildDirectory)/**/robocamhub_native.dll" />
+      <_BuiltNativeLibrary Include="$(NativeBuildDirectory)/**/librobocamhub_native.dylib" />
+      <_BuiltNativeLibrary Include="$(NativeBuildDirectory)/**/librobocamhub_native.so" />
+    </ItemGroup>
+
+    <Error Condition="'@(_BuiltNativeLibrary)' == ''"
+           Text="The native RoboCam Hub library was not produced by CMake." />
+    <Copy SourceFiles="@(_BuiltNativeLibrary)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

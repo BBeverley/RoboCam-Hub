@@ -5,5 +5,5 @@ namespace RoboCamHub.NativeInterop;
 /// </summary>
 public interface INativeAbiVersionQuery
 {
-    uint GetVersion();
+    NativeAbiVersion GetVersion();
 }

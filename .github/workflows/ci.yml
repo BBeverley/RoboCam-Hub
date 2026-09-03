@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-2025
+          - name: macOS arm64
+            os: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: ga
+
+      - name: Show toolchain versions
+        run: |
+          dotnet --info
+          cmake --version
+
+      - name: Configure native CMake project
+        run: cmake -S native -B native/build-ci -DBUILD_TESTING=ON
+
+      - name: Build native library and tests
+        run: cmake --build native/build-ci --config Release --parallel
+
+      - name: Run native CTest suite
+        run: ctest --test-dir native/build-ci --build-config Release --output-on-failure
+
+      - name: Restore managed solution
+        run: dotnet restore RoboCamHub.slnx
+
+      - name: Build managed solution and stage native ABI library
+        run: dotnet build RoboCamHub.slnx --configuration Release --no-restore --warnaserror
+
+      - name: Run managed unit tests
+        run: dotnet test tests/managed/RoboCamHub.Domain.Tests/RoboCamHub.Domain.Tests.csproj --configuration Release --no-build --no-restore
+
+      - name: Run managed/native ABI integration tests
+        run: dotnet test tests/managed/RoboCamHub.NativeInterop.Tests/RoboCamHub.NativeInterop.Tests.csproj --configuration Release --no-build --no-restore

@@ -7,7 +7,8 @@ namespace RoboCamHub.NativeInterop;
 /// </summary>
 public sealed class NativeAbiVersionQuery : INativeAbiVersionQuery
 {
-    public uint GetVersion() => NativeMethods.GetAbiVersion();
+    public NativeAbiVersion GetVersion()
+        => NativeAbiVersion.FromEncoded(NativeMethods.GetAbiVersion());
 }
 
 internal static partial class NativeMethods
@@ -16,4 +17,10 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibraryName, EntryPoint = "rch_get_abi_version")]
     internal static partial uint GetAbiVersion();
+
+    [LibraryImport(LibraryName, EntryPoint = "rch_engine_create")]
+    internal static partial NativeResult EngineCreate(out NativeEngineHandle engine);
+
+    [LibraryImport(LibraryName, EntryPoint = "rch_engine_destroy")]
+    internal static partial NativeResult EngineDestroy(nint engine);
 }

@@ -1,6 +1,8 @@
 #include "robocamhub_native.h"
 
 #include <chrono>
+#include <cstddef>
+#include <cstring>
 #include <cstdint>
 #include <iostream>
 #include <thread>
@@ -13,6 +15,11 @@ bool Expect(bool condition, const char* message)
     std::cerr << "FAILED: " << message << '\n';
   }
   return condition;
+}
+
+constexpr std::uint32_t StatusV1Size()
+{
+  return static_cast<std::uint32_t>(offsetof(rch_camera_status_v1, reconnect_attempt_count));
 }
 
 rch_camera_status_v1 QueryStatus(rch_engine_handle engine, bool& succeeded)
@@ -105,21 +112,51 @@ int main()
     if (!queried) {
       return 1;
     }
-    if (status.state == RCH_CAMERA_STATE_FAILED) {
+    if (status.last_result == RCH_RESULT_CONNECTION_TIMEOUT
+        || status.last_result == RCH_RESULT_RTSP_FAILURE) {
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   } while (std::chrono::steady_clock::now() < failure_deadline);
 
-  if (!Expect(status.state == RCH_CAMERA_STATE_FAILED,
-              "unreachable RTSP source must fail within the configured timeout")
+  if (!Expect(status.state == RCH_CAMERA_STATE_WAITING_TO_RETRY
+                || status.state == RCH_CAMERA_STATE_STARTING
+                || status.state == RCH_CAMERA_STATE_FAILED,
+              "unreachable RTSP source must enter retry/failure lifecycle")
       || !Expect(status.last_result == RCH_RESULT_CONNECTION_TIMEOUT
                    || status.last_result == RCH_RESULT_RTSP_FAILURE,
                  "failure must preserve an RTSP-specific result category")
       || !Expect(status.active_rtsp_session_count == 0,
                  "failed connection must release active RTSP ownership")
       || !Expect(status.active_decoder_count == 0,
-                 "failed connection must release active decoder ownership")) {
+                 "failed connection must release active decoder ownership")
+      || !Expect(status.reconnect_attempt_count >= 0,
+                 "status must expose reconnect attempt diagnostics")) {
+    return 1;
+  }
+
+  alignas(rch_camera_status_v1) std::uint8_t v1_buffer[StatusV1Size() + 16];
+  std::memset(v1_buffer, 0xA5, sizeof(v1_buffer));
+  auto* legacy_status = reinterpret_cast<rch_camera_status_v1*>(v1_buffer);
+  legacy_status->struct_size = StatusV1Size();
+  legacy_status->struct_version = RCH_CAMERA_STATUS_VERSION_V1;
+  if (!Expect(rch_camera_get_status(engine, legacy_status) == RCH_RESULT_OK,
+              "v1 status callers must remain supported")
+      || !Expect(legacy_status->struct_size == StatusV1Size()
+                   && legacy_status->struct_version == RCH_CAMERA_STATUS_VERSION_V1,
+                 "v1 status call must preserve reported v1 shape")) {
+    return 1;
+  }
+
+  bool canary_intact = true;
+  for (std::size_t offset = StatusV1Size(); offset < sizeof(v1_buffer); ++offset) {
+    if (v1_buffer[offset] != static_cast<std::uint8_t>(0xA5)) {
+      canary_intact = false;
+      break;
+    }
+  }
+  if (!Expect(canary_intact,
+              "status query must not write beyond a valid v1-sized caller buffer")) {
     return 1;
   }
 

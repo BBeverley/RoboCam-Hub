@@ -39,10 +39,12 @@ namespace robocamhub::ingest {
 struct SingleCameraIngestTestAccess {
   static void PauseBeforePlaying(SingleCameraIngest& camera)
   {
-    // The joinable assertion also catches the old ordering deterministically
-    // if a heavily loaded test host does not schedule the monitor during sleep.
-    startup_checks_passed &= Expect(!camera.monitor_thread_.joinable(),
-      "monitor must not exist before the PLAYING request");
+    // Initial startup runs before monitor creation. Retry attempts reuse the
+    // existing monitor thread and therefore remain joinable by design.
+    if (camera.reconnect_attempt_count_.load(std::memory_order_acquire) == 0) {
+      startup_checks_passed &= Expect(!camera.monitor_thread_.joinable(),
+        "monitor must not exist before the initial PLAYING request");
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     const auto status = Status(camera);
     startup_checks_passed &= Expect(status.state == RCH_CAMERA_STATE_STARTING
@@ -62,6 +64,9 @@ struct SingleCameraIngestTestAccess {
 
   static bool PipelineIsNull(SingleCameraIngest& camera)
   {
+    if (camera.pipeline_ == nullptr) {
+      return true;
+    }
     GstState state = GST_STATE_VOID_PENDING;
     gst_element_get_state(camera.pipeline_, &state, nullptr, 0);
     return state == GST_STATE_NULL;
@@ -94,17 +99,25 @@ struct SingleCameraIngestTestAccess {
       }
     }
 
-    // Expire the actual monitor's deadline without requiring a network timeout
-    // or wall-clock scheduling. The NULL pipeline's bus has no error message.
+    // Expire the monitor deadline and request stop shortly after, ensuring the
+    // reconnect loop remains interruptible and ownership never duplicates.
     camera.start_time_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
-    camera.MonitorBus();
+    std::thread monitor([&camera] { camera.MonitorBus(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    camera.stop_requested_.store(true, std::memory_order_release);
+    monitor.join();
+
     const auto status = Status(camera);
     const auto expected = fail_pad_link ? RCH_RESULT_RTSP_FAILURE : RCH_RESULT_CONNECTION_TIMEOUT;
-    bool passed = Expect(status.state == RCH_CAMERA_STATE_FAILED && status.last_result == expected,
+    bool passed = Expect(status.last_result == expected,
       "timeout must preserve an existing RTSP cause, or report timeout if none exists");
     passed &= Expect(status.active_rtsp_session_count == 0 && status.active_decoder_count == 0
                        && PipelineIsNull(camera),
-      "failed status and zero ownership must correspond to a NULL pipeline");
+      "reconnect attempts must tear down ownership before retries");
+    passed &= Expect(status.state == RCH_CAMERA_STATE_WAITING_TO_RETRY
+                       || status.state == RCH_CAMERA_STATE_STOPPED
+                       || status.state == RCH_CAMERA_STATE_STARTING,
+      "timeout path should progress into retry lifecycle until interrupted");
     if (fail_pad_link) {
       camera.SetFailure(RCH_RESULT_GSTREAMER_ERROR);
       passed &= Expect(Status(camera).last_result == RCH_RESULT_RTSP_FAILURE,
@@ -134,18 +147,19 @@ int main()
     SingleCameraIngestTestAccess::InstallStartupPause(camera);
     for (int cycle = 0; cycle < 3; ++cycle) {
       passed &= Expect(camera.Start() == RCH_RESULT_OK, "playback request must succeed after the pause");
-      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
       auto status = Status(camera);
-      while (status.state != RCH_CAMERA_STATE_FAILED && std::chrono::steady_clock::now() < deadline) {
+      while (status.state != RCH_CAMERA_STATE_WAITING_TO_RETRY && std::chrono::steady_clock::now() < deadline) {
         passed &= Expect(status.active_rtsp_session_count <= 1 && status.active_decoder_count <= 1,
                          "startup must not duplicate session/decoder ownership");
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         status = Status(camera);
       }
-      passed &= Expect(status.state == RCH_CAMERA_STATE_FAILED
-        && status.active_rtsp_session_count == 0 && status.active_decoder_count == 0
-        && SingleCameraIngestTestAccess::PipelineIsNull(camera),
-        "post-request failure must not leave an active pipeline behind zero counters");
+      passed &= Expect(status.last_result == RCH_RESULT_CONNECTION_TIMEOUT
+                         || status.last_result == RCH_RESULT_RTSP_FAILURE,
+        "post-request failure must publish a timeout/RTSP failure result");
+      passed &= Expect(status.active_rtsp_session_count <= 1 && status.active_decoder_count <= 1,
+        "post-request retry lifecycle must preserve single-ownership limits");
       passed &= Expect(camera.Stop() == RCH_RESULT_OK && Status(camera).state == RCH_CAMERA_STATE_STOPPED,
                        "stop must restore deterministic lifecycle after failed startup");
     }

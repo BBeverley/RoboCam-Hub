@@ -23,6 +23,8 @@ const char* StateName(rch_camera_state state)
       return "Failed";
     case RCH_CAMERA_STATE_STOPPING:
       return "Stopping";
+    case RCH_CAMERA_STATE_WAITING_TO_RETRY:
+      return "WaitingToRetry";
     default:
       return "Unknown";
   }
@@ -50,7 +52,10 @@ void PrintStatus(const rch_camera_status_v1& status)
             << " decoders=" << status.active_decoder_count
             << " frames=" << status.decoded_frame_count
             << " latest=" << status.latest_frame_sequence
-            << " size=" << status.latest_frame_width << 'x' << status.latest_frame_height;
+            << " size=" << status.latest_frame_width << 'x' << status.latest_frame_height
+            << " reconnect_attempts=" << status.reconnect_attempt_count
+            << " successful_reconnects=" << status.successful_reconnect_count
+            << " next_retry_ms=" << status.next_retry_delay_ms;
   if (status.has_latest_frame != 0) {
     std::cout << " age_ms=" << status.latest_frame_age_ms;
   } else {

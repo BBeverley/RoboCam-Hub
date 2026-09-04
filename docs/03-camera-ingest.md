@@ -215,6 +215,9 @@ Useful fields include:
 - last-frame age;
 - packet loss indicators where available;
 - reconnect count;
+- reconnect attempt count;
+- successful reconnect count;
+- next retry backoff delay;
 - stream health.
 
 If configuration parameters such as GOP/GOV can be read safely without requiring unsupported management credentials, they may be shown as diagnostic information.
@@ -303,6 +306,25 @@ When a camera disappears, RoboCam-Hub should:
 
 If the selected camera NIC itself disappears, the source should enter `Waiting for NIC` and resume automatically when that remembered adapter returns.
 
+### Gate 1C reconnect/backoff policy
+
+Gate 1C implements bounded automatic reconnect in the native ingest runtime.
+
+- initial retry delay: 250 ms;
+- exponential backoff sequence on consecutive failures: 250, 500, 1000, 2000 ms;
+- maximum retry delay: 2000 ms;
+- retry backoff resets after live frame receipt resumes;
+- explicit Stop and engine destruction interrupt pending backoff waits.
+
+Per retry attempt, the failed pipeline is torn down before a new attempt owns a pipeline. Latest-frame availability is cleared during outage and ownership counters return to zero before waiting/retrying.
+
+Required invariant remains:
+
+```text
+active_rtsp_session_count <= 1
+active_decoder_count <= 1
+```
+
 ## Diagnostics per camera
 
 At minimum expose or record:
@@ -320,6 +342,9 @@ At minimum expose or record:
 - last-frame age;
 - dropped-frame count where measurable;
 - reconnect count;
+- reconnect attempt count;
+- successful reconnect count;
+- next retry backoff delay;
 - packet-loss indicators where measurable;
 - decoder type;
 - current pipeline state.
@@ -355,7 +380,7 @@ The application is a **consumer and diagnostic viewer**, not a Robe camera confi
 
 Still to define through implementation/testing:
 
-1. reconnect timing/backoff values;
+1. outage/stale detection thresholds per transport profile and camera family;
 2. exact ONVIF discovery support across Samsung and Wisenet generations;
 3. stable Windows NIC identity strategy for USB adapters;
 4. secure credential approach if authenticated generic cameras are later supported;

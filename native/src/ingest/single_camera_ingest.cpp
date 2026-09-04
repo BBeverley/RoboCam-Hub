@@ -10,6 +10,9 @@ constexpr std::size_t maximum_rtsp_url_length = 2048;
 constexpr std::uint32_t default_connect_timeout_ms = 10000;
 constexpr std::uint32_t minimum_connect_timeout_ms = 100;
 constexpr std::uint32_t maximum_connect_timeout_ms = 120000;
+constexpr std::uint32_t default_receive_inactivity_timeout_ms = 2000;
+constexpr std::uint32_t default_initial_retry_backoff_ms = 250;
+constexpr std::uint32_t default_maximum_retry_backoff_ms = 2000;
 
 bool IsValidUtf8Field(const char* value, std::size_t maximum_length)
 {
@@ -71,7 +74,13 @@ rch_result SingleCameraIngest::Configure(const rch_camera_config_v1& config)
   camera_id_ = config.camera_id_utf8;
   rtsp_url_ = config.rtsp_url_utf8;
   connect_timeout_ = std::chrono::milliseconds(timeout_ms);
+  receive_inactivity_timeout_ = std::chrono::milliseconds(default_receive_inactivity_timeout_ms);
+  initial_retry_backoff_ = std::chrono::milliseconds(default_initial_retry_backoff_ms);
+  maximum_retry_backoff_ = std::chrono::milliseconds(default_maximum_retry_backoff_ms);
   configured_ = true;
+  reconnect_attempt_count_.store(0, std::memory_order_release);
+  successful_reconnect_count_.store(0, std::memory_order_release);
+  next_retry_delay_ms_.store(0, std::memory_order_release);
   state_.store(RCH_CAMERA_STATE_STOPPED, std::memory_order_release);
   last_result_.store(RCH_RESULT_OK, std::memory_order_release);
   return RCH_RESULT_OK;
@@ -96,39 +105,17 @@ rch_result SingleCameraIngest::Start()
   }
 
   latest_frame_.Clear();
+  reconnect_attempt_count_.store(0, std::memory_order_release);
+  next_retry_delay_ms_.store(0, std::memory_order_release);
   last_result_.store(RCH_RESULT_OK, std::memory_order_release);
-  state_.store(RCH_CAMERA_STATE_STARTING, std::memory_order_release);
 
-  const auto build_result = BuildPipeline();
-  if (build_result != RCH_RESULT_OK) {
-    SetFailure(build_result);
-    ResetPipeline();
+  const auto start_result = StartPipelinePlayback();
+  if (start_result != RCH_RESULT_OK) {
+    SetFailure(start_result);
     state_.store(RCH_CAMERA_STATE_FAILED, std::memory_order_release);
-    return build_result;
+    return start_result;
   }
 
-  active_session_count_.store(1, std::memory_order_release);
-  active_decoder_count_.store(1, std::memory_order_release);
-
-#if defined(RCH_INGEST_TESTING)
-  if (before_playing_for_test_ != nullptr) {
-    before_playing_for_test_(*this);
-  }
-#endif
-
-  // No monitor may tear down the still-NULL pipeline before this request.
-  // Messages produced during the request remain on the bus for the monitor.
-  const auto state_change = gst_element_set_state(pipeline_, GST_STATE_PLAYING);
-  if (state_change == GST_STATE_CHANGE_FAILURE) {
-    SetFailure(RCH_RESULT_GSTREAMER_ERROR);
-    ResetPipeline();
-    state_.store(RCH_CAMERA_STATE_FAILED, std::memory_order_release);
-    return RCH_RESULT_GSTREAMER_ERROR;
-  }
-
-  // Start the first-frame budget only after playback has been requested. These
-  // fields are published by thread creation, and unchanged until it is joined.
-  start_time_ = std::chrono::steady_clock::now();
   stop_requested_.store(false, std::memory_order_release);
   try {
     monitor_thread_ = std::thread(&SingleCameraIngest::MonitorBus, this);
@@ -145,7 +132,15 @@ rch_result SingleCameraIngest::Start()
 rch_result SingleCameraIngest::Stop()
 {
   const std::scoped_lock lock(control_mutex_);
+  stop_requested_.store(true, std::memory_order_release);
+
+  if (monitor_thread_.joinable()) {
+    monitor_thread_.join();
+  }
+
   if (pipeline_ == nullptr) {
+    reconnect_attempt_count_.store(0, std::memory_order_release);
+    next_retry_delay_ms_.store(0, std::memory_order_release);
     active_session_count_.store(0, std::memory_order_release);
     active_decoder_count_.store(0, std::memory_order_release);
     latest_frame_.Clear();
@@ -155,7 +150,9 @@ rch_result SingleCameraIngest::Stop()
   }
 
   state_.store(RCH_CAMERA_STATE_STOPPING, std::memory_order_release);
-  ResetPipeline();
+  TeardownPipelineNoJoin();
+  reconnect_attempt_count_.store(0, std::memory_order_release);
+  next_retry_delay_ms_.store(0, std::memory_order_release);
   latest_frame_.Clear();
   last_result_.store(RCH_RESULT_OK, std::memory_order_release);
   state_.store(RCH_CAMERA_STATE_STOPPED, std::memory_order_release);
@@ -177,6 +174,39 @@ void SingleCameraIngest::FillStatus(rch_camera_status_v1& status) const
   status.latest_frame_sequence = frame.sequence;
   status.latest_frame_timestamp_ns = frame.timestamp_ns;
   status.latest_frame_age_ms = frame.has_frame ? frame.age_ms : RCH_NO_FRAME_AGE_MS;
+  status.reconnect_attempt_count = reconnect_attempt_count_.load(std::memory_order_acquire);
+  status.successful_reconnect_count = successful_reconnect_count_.load(std::memory_order_acquire);
+  status.next_retry_delay_ms = next_retry_delay_ms_.load(std::memory_order_acquire);
+  status.reserved_v2 = 0;
+}
+
+rch_result SingleCameraIngest::StartPipelinePlayback()
+{
+  state_.store(RCH_CAMERA_STATE_STARTING, std::memory_order_release);
+
+  const auto build_result = BuildPipeline();
+  if (build_result != RCH_RESULT_OK) {
+    TeardownPipelineNoJoin();
+    return build_result;
+  }
+
+  active_session_count_.store(1, std::memory_order_release);
+  active_decoder_count_.store(1, std::memory_order_release);
+
+#if defined(RCH_INGEST_TESTING)
+  if (before_playing_for_test_ != nullptr) {
+    before_playing_for_test_(*this);
+  }
+#endif
+
+  const auto state_change = gst_element_set_state(pipeline_, GST_STATE_PLAYING);
+  if (state_change == GST_STATE_CHANGE_FAILURE) {
+    TeardownPipelineNoJoin();
+    return RCH_RESULT_GSTREAMER_ERROR;
+  }
+
+  start_time_ = std::chrono::steady_clock::now();
+  return RCH_RESULT_OK;
 }
 
 rch_result SingleCameraIngest::BuildPipeline()
@@ -282,20 +312,96 @@ void SingleCameraIngest::MonitorBus()
         }
         g_free(debug_details);
         gst_message_unref(message);
-        SetFailure(result);
-        return;
+        if (!HandleFailureAndReconnect(result)) {
+          return;
+        }
+        continue;
       }
 
       gst_message_unref(message);
-      SetFailure(RCH_RESULT_RTSP_FAILURE);
-      return;
+      if (!HandleFailureAndReconnect(RCH_RESULT_RTSP_FAILURE)) {
+        return;
+      }
+      continue;
     }
 
     if (state_.load(std::memory_order_acquire) == RCH_CAMERA_STATE_STARTING
         && std::chrono::steady_clock::now() - start_time_ >= connect_timeout_) {
-      SetFailure(RCH_RESULT_CONNECTION_TIMEOUT);
-      return;
+      if (!HandleFailureAndReconnect(RCH_RESULT_CONNECTION_TIMEOUT)) {
+        return;
+      }
+      continue;
     }
+
+    if (state_.load(std::memory_order_acquire) == RCH_CAMERA_STATE_RECEIVING) {
+      const auto frame = latest_frame_.Snapshot();
+      if (!frame.has_frame || frame.age_ms >= static_cast<std::uint64_t>(receive_inactivity_timeout_.count())) {
+        if (!HandleFailureAndReconnect(RCH_RESULT_RTSP_FAILURE)) {
+          return;
+        }
+      }
+    }
+  }
+}
+
+bool SingleCameraIngest::HandleFailureAndReconnect(rch_result result)
+{
+  RecordFailure(result);
+  latest_frame_.Clear();
+  active_session_count_.store(0, std::memory_order_release);
+  active_decoder_count_.store(0, std::memory_order_release);
+
+  TeardownPipelineNoJoin();
+
+  while (!stop_requested_.load(std::memory_order_acquire)) {
+    state_.store(RCH_CAMERA_STATE_WAITING_TO_RETRY, std::memory_order_release);
+
+    const auto attempt = reconnect_attempt_count_.fetch_add(1, std::memory_order_acq_rel) + 1U;
+    std::uint64_t retry_delay_ms = static_cast<std::uint64_t>(initial_retry_backoff_.count());
+    for (std::uint32_t step = 1; step < attempt; ++step) {
+      retry_delay_ms *= 2U;
+      if (retry_delay_ms >= static_cast<std::uint64_t>(maximum_retry_backoff_.count())) {
+        retry_delay_ms = static_cast<std::uint64_t>(maximum_retry_backoff_.count());
+        break;
+      }
+    }
+
+    auto retry_delay = std::chrono::milliseconds(retry_delay_ms);
+    if (retry_delay > maximum_retry_backoff_) {
+      retry_delay = maximum_retry_backoff_;
+    }
+    next_retry_delay_ms_.store(static_cast<std::uint32_t>(retry_delay.count()), std::memory_order_release);
+    WaitForBackoff(retry_delay);
+    next_retry_delay_ms_.store(0, std::memory_order_release);
+    if (stop_requested_.load(std::memory_order_acquire)) {
+      return false;
+    }
+
+    if (stop_requested_.load(std::memory_order_acquire)) {
+      return false;
+    }
+
+    latest_frame_.Clear();
+    const auto start_result = StartPipelinePlayback();
+    if (start_result == RCH_RESULT_OK) {
+      return true;
+    }
+
+    RecordFailure(start_result);
+  }
+
+  return false;
+}
+
+void SingleCameraIngest::WaitForBackoff(std::chrono::milliseconds delay)
+{
+  const auto slice = std::chrono::milliseconds(10);
+  auto waited = std::chrono::milliseconds(0);
+  while (waited < delay && !stop_requested_.load(std::memory_order_acquire)) {
+    const auto remaining = delay - waited;
+    const auto wait_duration = remaining < slice ? remaining : slice;
+    std::this_thread::sleep_for(wait_duration);
+    waited += wait_duration;
   }
 }
 
@@ -314,23 +420,18 @@ void SingleCameraIngest::RecordFailure(rch_result result)
 void SingleCameraIngest::SetFailure(rch_result result)
 {
   RecordFailure(result);
-  if (pipeline_ != nullptr) {
-    gst_element_set_state(pipeline_, GST_STATE_NULL);
-  }
+  TeardownPipelineNoJoin();
   latest_frame_.Clear();
+  next_retry_delay_ms_.store(0, std::memory_order_release);
   active_session_count_.store(0, std::memory_order_release);
   active_decoder_count_.store(0, std::memory_order_release);
   state_.store(RCH_CAMERA_STATE_FAILED, std::memory_order_release);
 }
 
-void SingleCameraIngest::ResetPipeline()
+void SingleCameraIngest::TeardownPipelineNoJoin()
 {
-  stop_requested_.store(true, std::memory_order_release);
   if (pipeline_ != nullptr) {
     gst_element_set_state(pipeline_, GST_STATE_NULL);
-  }
-  if (monitor_thread_.joinable()) {
-    monitor_thread_.join();
   }
   if (bus_ != nullptr) {
     gst_object_unref(bus_);
@@ -347,6 +448,18 @@ void SingleCameraIngest::ResetPipeline()
   bus_ = nullptr;
   active_session_count_.store(0, std::memory_order_release);
   active_decoder_count_.store(0, std::memory_order_release);
+}
+
+void SingleCameraIngest::ResetPipeline()
+{
+  stop_requested_.store(true, std::memory_order_release);
+  if (pipeline_ != nullptr) {
+    gst_element_set_state(pipeline_, GST_STATE_NULL);
+  }
+  if (monitor_thread_.joinable()) {
+    monitor_thread_.join();
+  }
+  TeardownPipelineNoJoin();
 }
 
 void SingleCameraIngest::OnRtspPadAdded(GstElement*, GstPad* new_pad, gpointer user_data)
@@ -404,8 +517,16 @@ GstFlowReturn SingleCameraIngest::OnNewSample(GstAppSink* sink, gpointer user_da
   gst_sample_unref(sample);
 
   rch_camera_state expected_state = RCH_CAMERA_STATE_STARTING;
-  self->state_.compare_exchange_strong(expected_state, RCH_CAMERA_STATE_RECEIVING,
-                                      std::memory_order_acq_rel);
+  if (self->state_.compare_exchange_strong(expected_state,
+                                           RCH_CAMERA_STATE_RECEIVING,
+                                           std::memory_order_acq_rel)) {
+    if (self->reconnect_attempt_count_.load(std::memory_order_acquire) > 0) {
+      self->successful_reconnect_count_.fetch_add(1, std::memory_order_acq_rel);
+      self->reconnect_attempt_count_.store(0, std::memory_order_release);
+    }
+    self->last_result_.store(RCH_RESULT_OK, std::memory_order_release);
+    self->next_retry_delay_ms_.store(0, std::memory_order_release);
+  }
   return GST_FLOW_OK;
 }
 

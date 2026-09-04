@@ -5,6 +5,7 @@
 #include <gst/gst.h>
 
 #include <cstddef>
+#include <cstring>
 #include <new>
 
 namespace {
@@ -140,15 +141,31 @@ extern "C" rch_result rch_camera_get_status(
   if (engine == nullptr) {
     return RCH_RESULT_INVALID_HANDLE;
   }
-  if (out_status == nullptr || out_status->struct_size < sizeof(rch_camera_status_v1)
-      || out_status->struct_version != RCH_CAMERA_STATUS_VERSION) {
+  const auto status_version = out_status == nullptr ? 0U : out_status->struct_version;
+  const auto status_size = out_status == nullptr ? 0U : out_status->struct_size;
+  constexpr std::uint32_t status_v1_size =
+    static_cast<std::uint32_t>(offsetof(rch_camera_status_v1, reconnect_attempt_count));
+
+  const bool status_v1_ok =
+    status_version == RCH_CAMERA_STATUS_VERSION_V1 && status_size >= status_v1_size;
+  const bool status_v2_ok =
+    status_version == RCH_CAMERA_STATUS_VERSION_V2 && status_size >= sizeof(rch_camera_status_v1);
+  if (!status_v1_ok && !status_v2_ok) {
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
   try {
-    engine->camera.FillStatus(*out_status);
-    out_status->struct_size = static_cast<uint32_t>(sizeof(rch_camera_status_v1));
-    out_status->struct_version = RCH_CAMERA_STATUS_VERSION;
+    rch_camera_status_v1 full_status{};
+    engine->camera.FillStatus(full_status);
+    full_status.struct_size = status_v2_ok
+      ? static_cast<uint32_t>(sizeof(rch_camera_status_v1))
+      : status_v1_size;
+    full_status.struct_version = status_v2_ok
+      ? RCH_CAMERA_STATUS_VERSION_V2
+      : RCH_CAMERA_STATUS_VERSION_V1;
+
+    const auto bytes_to_copy = status_v2_ok ? sizeof(rch_camera_status_v1) : status_v1_size;
+    std::memcpy(out_status, &full_status, bytes_to_copy);
     return RCH_RESULT_OK;
   } catch (...) {
     return RCH_RESULT_INTERNAL_ERROR;

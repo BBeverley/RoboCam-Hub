@@ -40,9 +40,13 @@ private:
   static GstFlowReturn OnNewSample(GstAppSink* sink, gpointer user_data);
 
   rch_result BuildPipeline();
+  rch_result StartPipelinePlayback();
   void MonitorBus();
+  bool HandleFailureAndReconnect(rch_result result);
+  void WaitForBackoff(std::chrono::milliseconds delay);
   void RecordFailure(rch_result result);
   void SetFailure(rch_result result);
+  void TeardownPipelineNoJoin();
   void ResetPipeline();
 
   std::mutex control_mutex_;
@@ -50,6 +54,9 @@ private:
   std::string camera_id_;
   std::string rtsp_url_;
   std::chrono::milliseconds connect_timeout_{10000};
+  std::chrono::milliseconds receive_inactivity_timeout_{2000};
+  std::chrono::milliseconds initial_retry_backoff_{250};
+  std::chrono::milliseconds maximum_retry_backoff_{2000};
 
   GstElement* pipeline_{nullptr};
   GstElement* rtsp_source_{nullptr};
@@ -65,6 +72,9 @@ private:
   std::atomic<rch_result> last_result_{RCH_RESULT_OK};
   std::atomic<std::uint32_t> active_session_count_{0};
   std::atomic<std::uint32_t> active_decoder_count_{0};
+  std::atomic<std::uint32_t> reconnect_attempt_count_{0};
+  std::atomic<std::uint32_t> successful_reconnect_count_{0};
+  std::atomic<std::uint32_t> next_retry_delay_ms_{0};
   frames::LatestFrame latest_frame_;
 };
 

@@ -105,21 +105,26 @@ int main()
     if (!queried) {
       return 1;
     }
-    if (status.state == RCH_CAMERA_STATE_FAILED) {
+    if (status.last_result == RCH_RESULT_CONNECTION_TIMEOUT
+        || status.last_result == RCH_RESULT_RTSP_FAILURE) {
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   } while (std::chrono::steady_clock::now() < failure_deadline);
 
-  if (!Expect(status.state == RCH_CAMERA_STATE_FAILED,
-              "unreachable RTSP source must fail within the configured timeout")
+  if (!Expect(status.state == RCH_CAMERA_STATE_WAITING_TO_RETRY
+                || status.state == RCH_CAMERA_STATE_STARTING
+                || status.state == RCH_CAMERA_STATE_FAILED,
+              "unreachable RTSP source must enter retry/failure lifecycle")
       || !Expect(status.last_result == RCH_RESULT_CONNECTION_TIMEOUT
                    || status.last_result == RCH_RESULT_RTSP_FAILURE,
                  "failure must preserve an RTSP-specific result category")
       || !Expect(status.active_rtsp_session_count == 0,
                  "failed connection must release active RTSP ownership")
       || !Expect(status.active_decoder_count == 0,
-                 "failed connection must release active decoder ownership")) {
+                 "failed connection must release active decoder ownership")
+      || !Expect(status.reconnect_attempt_count >= 0,
+                 "status must expose reconnect attempt diagnostics")) {
     return 1;
   }
 

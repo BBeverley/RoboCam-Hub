@@ -23,11 +23,13 @@ extern "C" {
 #endif
 
 #define RCH_ABI_VERSION_MAJOR UINT32_C(1)
-#define RCH_ABI_VERSION_MINOR UINT32_C(1)
+#define RCH_ABI_VERSION_MINOR UINT32_C(2)
 #define RCH_ABI_VERSION ((RCH_ABI_VERSION_MAJOR << 16U) | RCH_ABI_VERSION_MINOR)
 
 #define RCH_CAMERA_CONFIG_VERSION UINT32_C(1)
-#define RCH_CAMERA_STATUS_VERSION UINT32_C(1)
+#define RCH_CAMERA_STATUS_VERSION_V1 UINT32_C(1)
+#define RCH_CAMERA_STATUS_VERSION_V2 UINT32_C(2)
+#define RCH_CAMERA_STATUS_VERSION RCH_CAMERA_STATUS_VERSION_V2
 #define RCH_NO_FRAME_AGE_MS UINT64_MAX
 
 /* Fixed-width result type with stable named error-code constants. */
@@ -56,7 +58,8 @@ enum rch_camera_state_code {
   RCH_CAMERA_STATE_STARTING = 1,
   RCH_CAMERA_STATE_RECEIVING = 2,
   RCH_CAMERA_STATE_FAILED = 3,
-  RCH_CAMERA_STATE_STOPPING = 4
+  RCH_CAMERA_STATE_STOPPING = 4,
+  RCH_CAMERA_STATE_WAITING_TO_RETRY = 5
 };
 
 /* The UTF-8 strings are borrowed only for the duration of
@@ -79,7 +82,10 @@ typedef struct rch_camera_config_v1 {
  * owned pipeline while starting/receiving, not wire-level connection evidence.
  * Frame count/sequence are cumulative across starts; timestamp is stream PTS
  * (DTS fallback, zero if absent), not wall-clock time. Age is monotonic time
- * since local frame arrival, or RCH_NO_FRAME_AGE_MS if no frame exists. */
+ * since local frame arrival, or RCH_NO_FRAME_AGE_MS if no frame exists.
+ *
+ * Version 1 includes fields up to latest_frame_age_ms.
+ * Version 2 additively appends reconnect/backoff diagnostics. */
 typedef struct rch_camera_status_v1 {
   uint32_t struct_size;
   uint32_t struct_version;
@@ -95,6 +101,10 @@ typedef struct rch_camera_status_v1 {
   uint64_t latest_frame_sequence;
   uint64_t latest_frame_timestamp_ns;
   uint64_t latest_frame_age_ms;
+  uint32_t reconnect_attempt_count;
+  uint32_t successful_reconnect_count;
+  uint32_t next_retry_delay_ms;
+  uint32_t reserved_v2;
 } rch_camera_status_v1;
 
 /* Opaque, native-owned handle. Create it with rch_engine_create and release it

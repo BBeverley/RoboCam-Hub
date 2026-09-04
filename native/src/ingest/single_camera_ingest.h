@@ -30,11 +30,18 @@ public:
   void FillStatus(rch_camera_status_v1& status) const;
 
 private:
+#if defined(RCH_INGEST_TESTING)
+  // Only the separately compiled regression-test target has this scheduling seam.
+  friend struct SingleCameraIngestTestAccess;
+  void (*before_playing_for_test_)(SingleCameraIngest&){nullptr};
+#endif
+
   static void OnRtspPadAdded(GstElement* source, GstPad* new_pad, gpointer user_data);
   static GstFlowReturn OnNewSample(GstAppSink* sink, gpointer user_data);
 
   rch_result BuildPipeline();
   void MonitorBus();
+  void RecordFailure(rch_result result);
   void SetFailure(rch_result result);
   void ResetPipeline();
 

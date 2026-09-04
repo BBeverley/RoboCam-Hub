@@ -53,3 +53,20 @@ rch_enable_project_warnings(robocamhub_rtsp_fixture_tests)
 rch_enable_sanitizers(robocamhub_rtsp_fixture_tests)
 add_test(NAME robocamhub_native.loopback_rtsp COMMAND robocamhub_rtsp_fixture_tests)
 set_tests_properties(robocamhub_native.loopback_rtsp PROPERTIES TIMEOUT 40)
+
+# Compile the actual ingest implementation separately so deterministic scheduling
+# hooks and private test access never enter the shared library or exported ABI.
+add_executable(robocamhub_ingest_regression_tests
+  ingest_regression_test.cpp
+  ../src/ingest/single_camera_ingest.cpp
+  ../src/frames/latest_frame.cpp
+)
+target_compile_definitions(robocamhub_ingest_regression_tests PRIVATE RCH_INGEST_TESTING)
+target_compile_features(robocamhub_ingest_regression_tests PRIVATE cxx_std_20)
+target_include_directories(robocamhub_ingest_regression_tests PRIVATE ../src ../include)
+target_link_libraries(robocamhub_ingest_regression_tests PRIVATE PkgConfig::GSTREAMER Threads::Threads)
+set_target_properties(robocamhub_ingest_regression_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_ingest_regression_tests)
+rch_enable_sanitizers(robocamhub_ingest_regression_tests)
+add_test(NAME robocamhub_native.ingest_regressions COMMAND robocamhub_ingest_regression_tests)
+set_tests_properties(robocamhub_native.ingest_regressions PROPERTIES TIMEOUT 15)

@@ -62,7 +62,8 @@ enum rch_camera_state_code {
 /* The UTF-8 strings are borrowed only for the duration of
  * rch_camera_configure. Strings are NUL-terminated, nonempty UTF-8 (ID <=255
  * bytes; URL <=2048 bytes). connect_timeout_ms is the deadline for the first
- * decoded frame: zero selects 10000 ms, otherwise 100..120000. reserved is zero. */
+ * decoded frame, measured after the PLAYING request returns: zero selects
+ * 10000 ms, otherwise 100..120000. reserved is zero. */
 typedef struct rch_camera_config_v1 {
   uint32_t struct_size;
   uint32_t struct_version;

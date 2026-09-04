@@ -22,6 +22,20 @@ bool IsRtspUrl(const char* value)
   return std::strncmp(value, "rtsp://", 7) == 0 || std::strncmp(value, "rtsps://", 8) == 0;
 }
 
+int FailureSpecificity(rch_result result)
+{
+  if (result == RCH_RESULT_OK) {
+    return 0;
+  }
+  if (result == RCH_RESULT_CONNECTION_TIMEOUT) {
+    return 1;
+  }
+  if (result == RCH_RESULT_GSTREAMER_ERROR) {
+    return 2;
+  }
+  return 3;
+}
+
 }  // namespace
 
 SingleCameraIngest::~SingleCameraIngest()
@@ -95,9 +109,27 @@ rch_result SingleCameraIngest::Start()
 
   active_session_count_.store(1, std::memory_order_release);
   active_decoder_count_.store(1, std::memory_order_release);
-  stop_requested_.store(false, std::memory_order_release);
-  start_time_ = std::chrono::steady_clock::now();
 
+#if defined(RCH_INGEST_TESTING)
+  if (before_playing_for_test_ != nullptr) {
+    before_playing_for_test_(*this);
+  }
+#endif
+
+  // No monitor may tear down the still-NULL pipeline before this request.
+  // Messages produced during the request remain on the bus for the monitor.
+  const auto state_change = gst_element_set_state(pipeline_, GST_STATE_PLAYING);
+  if (state_change == GST_STATE_CHANGE_FAILURE) {
+    SetFailure(RCH_RESULT_GSTREAMER_ERROR);
+    ResetPipeline();
+    state_.store(RCH_CAMERA_STATE_FAILED, std::memory_order_release);
+    return RCH_RESULT_GSTREAMER_ERROR;
+  }
+
+  // Start the first-frame budget only after playback has been requested. These
+  // fields are published by thread creation, and unchanged until it is joined.
+  start_time_ = std::chrono::steady_clock::now();
+  stop_requested_.store(false, std::memory_order_release);
   try {
     monitor_thread_ = std::thread(&SingleCameraIngest::MonitorBus, this);
   } catch (...) {
@@ -105,14 +137,6 @@ rch_result SingleCameraIngest::Start()
     ResetPipeline();
     state_.store(RCH_CAMERA_STATE_FAILED, std::memory_order_release);
     return RCH_RESULT_OUT_OF_MEMORY;
-  }
-
-  const auto state_change = gst_element_set_state(pipeline_, GST_STATE_PLAYING);
-  if (state_change == GST_STATE_CHANGE_FAILURE) {
-    SetFailure(RCH_RESULT_GSTREAMER_ERROR);
-    ResetPipeline();
-    state_.store(RCH_CAMERA_STATE_FAILED, std::memory_order_release);
-    return RCH_RESULT_GSTREAMER_ERROR;
   }
 
   return RCH_RESULT_OK;
@@ -275,9 +299,21 @@ void SingleCameraIngest::MonitorBus()
   }
 }
 
+void SingleCameraIngest::RecordFailure(rch_result result)
+{
+  // First specific cause wins. A timeout/generic error may be refined, never
+  // replace a more specific callback/bus error, including concurrent reports.
+  auto previous = last_result_.load(std::memory_order_acquire);
+  while (FailureSpecificity(result) > FailureSpecificity(previous)) {
+    if (last_result_.compare_exchange_weak(previous, result, std::memory_order_acq_rel)) {
+      return;
+    }
+  }
+}
+
 void SingleCameraIngest::SetFailure(rch_result result)
 {
-  last_result_.store(result, std::memory_order_release);
+  RecordFailure(result);
   if (pipeline_ != nullptr) {
     gst_element_set_state(pipeline_, GST_STATE_NULL);
   }
@@ -340,7 +376,7 @@ void SingleCameraIngest::OnRtspPadAdded(GstElement*, GstPad* new_pad, gpointer u
   }
 
   if (is_h264_video && gst_pad_link(new_pad, sink_pad) != GST_PAD_LINK_OK) {
-    self->last_result_.store(RCH_RESULT_RTSP_FAILURE, std::memory_order_release);
+    self->RecordFailure(RCH_RESULT_RTSP_FAILURE);
   }
 
   if (caps != nullptr) {

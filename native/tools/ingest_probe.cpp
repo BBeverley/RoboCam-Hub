@@ -1,6 +1,7 @@
 #include "robocamhub_native.h"
 
 #include <chrono>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -30,8 +31,9 @@ const char* StateName(rch_camera_state state)
 bool ParseDuration(const char* value, std::uint32_t& duration_seconds)
 {
   char* end = nullptr;
+  errno = 0;
   const auto parsed = std::strtoul(value, &end, 10);
-  if (end == value || *end != '\0' || parsed == 0
+  if (value[0] == '-' || end == value || *end != '\0' || errno == ERANGE || parsed == 0
       || parsed > std::numeric_limits<std::uint32_t>::max()) {
     return false;
   }
@@ -43,7 +45,7 @@ bool ParseDuration(const char* value, std::uint32_t& duration_seconds)
 void PrintStatus(const rch_camera_status_v1& status)
 {
   std::cout << "state=" << StateName(status.state)
-            << " transport=udp"
+            << " configured_transport=udp"
             << " sessions=" << status.active_rtsp_session_count
             << " decoders=" << status.active_decoder_count
             << " frames=" << status.decoded_frame_count
@@ -54,7 +56,7 @@ void PrintStatus(const rch_camera_status_v1& status)
   } else {
     std::cout << " age_ms=n/a";
   }
-  std::cout << " last_result=" << status.last_result << '\n';
+  std::cout << " last_result=" << status.last_result << std::endl;
 }
 
 }  // namespace

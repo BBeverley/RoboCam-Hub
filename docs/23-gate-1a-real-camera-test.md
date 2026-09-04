@@ -92,8 +92,9 @@ are required.
    from the probe or a separate `gst-launch` reference alone.
 8. Compare frame age near the beginning and end of the run. It must not trend
    progressively upward. Record process memory at both points as a leak check.
-9. Stop the probe normally. Its final line must report `Stopped`, `sessions=0`
-   and `decoders=0`.
+9. Let the requested duration finish (do not force-kill the probe). Its final
+   line must report `Stopped`, `sessions=0` and `decoders=0`. A failure exits
+   nonzero; preserve its `last_result` category and GStreamer diagnostics.
 
 ## Hardware acceptance still pending
 

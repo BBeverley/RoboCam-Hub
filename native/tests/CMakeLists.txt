@@ -72,6 +72,15 @@ rch_enable_sanitizers(robocamhub_multicamera_race_tests)
 add_test(NAME robocamhub_native.multicamera_race COMMAND robocamhub_multicamera_race_tests)
 set_tests_properties(robocamhub_native.multicamera_race PROPERTIES TIMEOUT 30)
 
+add_executable(robocamhub_multicamera_diagnostics_tests multi_camera_diagnostics_test.cpp)
+target_compile_features(robocamhub_multicamera_diagnostics_tests PRIVATE cxx_std_20)
+target_link_libraries(robocamhub_multicamera_diagnostics_tests PRIVATE robocamhub_native Threads::Threads)
+set_target_properties(robocamhub_multicamera_diagnostics_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_multicamera_diagnostics_tests)
+rch_enable_sanitizers(robocamhub_multicamera_diagnostics_tests)
+add_test(NAME robocamhub_native.multicamera_diagnostics COMMAND robocamhub_multicamera_diagnostics_tests)
+set_tests_properties(robocamhub_native.multicamera_diagnostics PROPERTIES TIMEOUT 30)
+
 # Compile the actual ingest implementation separately so deterministic scheduling
 # hooks and private test access never enter the shared library or exported ABI.
 add_executable(robocamhub_ingest_regression_tests

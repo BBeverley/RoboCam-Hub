@@ -224,6 +224,57 @@ If configuration parameters such as GOP/GOV can be read safely without requiring
 
 RoboCam-Hub must not offer camera configuration edits in v1.
 
+## Gate 2B diagnostics and managed interop semantics
+
+The managed application layer consumes low-frequency ingest diagnostics through
+the native C ABI. It does not own, decode or transport media frames.
+
+### Camera ID enumeration
+
+- configured logical camera IDs are enumerated by the native engine;
+- enumeration returns IDs in deterministic lexical order by camera ID;
+- IDs are returned through caller-provided UTF-8 buffers;
+- callers must follow count/required-size semantics and retry when the camera
+  set changes between calls;
+- add/remove operations may occur concurrently with enumeration without
+  undefined memory ownership;
+- no STL/native-owned string container crosses the ABI boundary.
+
+### Aggregate engine diagnostics
+
+The native engine exposes a point-in-time aggregate snapshot including:
+
+- configured camera count;
+- active RTSP session total;
+- active decoder total;
+- cameras grouped by ingest state (starting, receiving, waiting-to-retry,
+  failed, stopped/stopping);
+- optional cumulative successful reconnect total.
+
+These diagnostics are designed for low-frequency status presentation and test
+invariant validation, not per-frame telemetry.
+
+### Duplicate and re-add semantics
+
+- adding an already configured logical camera ID overwrites its configuration
+  in-place for that single logical camera slot;
+- duplicate add does not create a second configured camera entry;
+- removing a camera releases its ingest ownership and removes it from
+  enumeration;
+- operations on removed IDs return explicit not-configured/stale failures;
+- re-adding a previously removed ID creates a fresh entry with deterministic
+  behavior.
+
+### Managed/native ownership rule
+
+Managed code may call add/remove/start/stop/status/enumeration/aggregate
+snapshot APIs, but media frame ownership remains native:
+
+- no managed RTSP sessions;
+- no managed decode path;
+- no per-frame callbacks for ingest video frames;
+- no full-frame copy loop across the ABI for diagnostics.
+
 ## Connection workflow
 
 For each enabled source, the camera manager should:

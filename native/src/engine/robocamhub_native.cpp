@@ -4,8 +4,11 @@
 
 #include <gst/gst.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -106,6 +109,26 @@ std::shared_ptr<CameraEntry> FindCameraById(
     return nullptr;
   }
   return found->second;
+}
+
+std::vector<std::pair<std::string, std::shared_ptr<CameraEntry>>> SnapshotSortedCameras(
+  rch_engine_handle engine)
+{
+  std::vector<std::pair<std::string, std::shared_ptr<CameraEntry>>> snapshot;
+  {
+    std::lock_guard lock(engine->camera_registry_mutex_);
+    snapshot.reserve(engine->cameras_.size());
+    for (const auto& [camera_id, entry] : engine->cameras_) {
+      snapshot.emplace_back(camera_id, entry);
+    }
+  }
+
+  std::sort(
+    snapshot.begin(),
+    snapshot.end(),
+    [](const auto& left, const auto& right) { return left.first < right.first; });
+
+  return snapshot;
 }
 
 extern "C" uint32_t rch_get_abi_version(void) noexcept
@@ -460,6 +483,131 @@ extern "C" rch_result rch_camera_get_status_by_id(
 
     const auto bytes_to_copy = status_v2_ok ? sizeof(rch_camera_status_v1) : status_v1_size;
     std::memcpy(out_status, &full_status, bytes_to_copy);
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_camera_enumerate_ids(
+  rch_engine_handle engine,
+  char* out_ids_utf8_buffer,
+  uint32_t out_ids_utf8_buffer_size,
+  uint32_t* out_required_buffer_size,
+  uint32_t* out_camera_count) noexcept
+{
+  if (engine == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_required_buffer_size == nullptr || out_camera_count == nullptr) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+  if (out_ids_utf8_buffer == nullptr && out_ids_utf8_buffer_size != 0U) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  try {
+    const auto cameras = SnapshotSortedCameras(engine);
+    std::size_t required_size = 0;
+    for (const auto& [camera_id, entry] : cameras) {
+      (void)entry;
+      required_size += camera_id.size() + 1U;
+    }
+
+    if (required_size > static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())) {
+      return RCH_RESULT_OUT_OF_MEMORY;
+    }
+
+    *out_camera_count = static_cast<uint32_t>(cameras.size());
+    *out_required_buffer_size = static_cast<uint32_t>(required_size);
+
+    if (out_ids_utf8_buffer == nullptr && out_ids_utf8_buffer_size == 0U) {
+      return RCH_RESULT_OK;
+    }
+
+    if (required_size == 0U) {
+      return RCH_RESULT_OK;
+    }
+
+    if (out_ids_utf8_buffer_size < required_size || out_ids_utf8_buffer == nullptr) {
+      return RCH_RESULT_BUFFER_TOO_SMALL;
+    }
+
+    std::size_t write_offset = 0;
+    for (const auto& [camera_id, entry] : cameras) {
+      (void)entry;
+      const auto camera_id_size = camera_id.size() + 1U;
+      std::memcpy(out_ids_utf8_buffer + write_offset, camera_id.c_str(), camera_id_size);
+      write_offset += camera_id_size;
+    }
+
+    return RCH_RESULT_OK;
+  } catch (const std::bad_alloc&) {
+    return RCH_RESULT_OUT_OF_MEMORY;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_engine_get_diagnostics(
+  rch_engine_handle engine,
+  rch_engine_diagnostics_v1* out_diagnostics) noexcept
+{
+  if (engine == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_diagnostics == nullptr || out_diagnostics->struct_size < sizeof(rch_engine_diagnostics_v1)
+      || out_diagnostics->struct_version != RCH_ENGINE_DIAGNOSTICS_VERSION_V1) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  try {
+    rch_engine_diagnostics_v1 diagnostics{};
+    diagnostics.struct_size = static_cast<uint32_t>(sizeof(rch_engine_diagnostics_v1));
+    diagnostics.struct_version = RCH_ENGINE_DIAGNOSTICS_VERSION_V1;
+
+    const auto cameras = SnapshotSortedCameras(engine);
+    diagnostics.configured_camera_count = static_cast<uint32_t>(cameras.size());
+
+    for (const auto& [camera_id, entry] : cameras) {
+      (void)camera_id;
+      if (entry == nullptr || entry->ingest == nullptr) {
+        continue;
+      }
+
+      std::unique_lock lifecycle_lock(entry->lifecycle_mutex);
+      if (entry->removed.load(std::memory_order_acquire)) {
+        continue;
+      }
+
+      rch_camera_status_v1 status{};
+      entry->ingest->FillStatus(status);
+      diagnostics.active_rtsp_session_total += status.active_rtsp_session_count;
+      diagnostics.active_decoder_total += status.active_decoder_count;
+      diagnostics.successful_reconnect_total += status.successful_reconnect_count;
+
+      switch (status.state) {
+        case RCH_CAMERA_STATE_STARTING:
+          diagnostics.cameras_starting_count += 1U;
+          break;
+        case RCH_CAMERA_STATE_RECEIVING:
+          diagnostics.cameras_receiving_count += 1U;
+          break;
+        case RCH_CAMERA_STATE_WAITING_TO_RETRY:
+          diagnostics.cameras_waiting_to_retry_count += 1U;
+          break;
+        case RCH_CAMERA_STATE_FAILED:
+          diagnostics.cameras_failed_count += 1U;
+          break;
+        case RCH_CAMERA_STATE_STOPPED:
+        case RCH_CAMERA_STATE_STOPPING:
+        default:
+          diagnostics.cameras_stopped_count += 1U;
+          break;
+      }
+    }
+
+    std::memcpy(out_diagnostics, &diagnostics, sizeof(diagnostics));
     return RCH_RESULT_OK;
   } catch (...) {
     return RCH_RESULT_INTERNAL_ERROR;

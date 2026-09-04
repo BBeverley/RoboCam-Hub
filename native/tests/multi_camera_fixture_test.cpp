@@ -120,6 +120,19 @@ rch_camera_status_v1 Status(rch_engine_handle engine, const char* camera_id)
   return status;
 }
 
+rch_engine_diagnostics_v1 Diagnostics(rch_engine_handle engine)
+{
+  rch_engine_diagnostics_v1 diagnostics{};
+  diagnostics.struct_size = static_cast<std::uint32_t>(sizeof(diagnostics));
+  diagnostics.struct_version = RCH_ENGINE_DIAGNOSTICS_VERSION;
+  if (rch_engine_get_diagnostics(engine, &diagnostics) != RCH_RESULT_OK) {
+    diagnostics.configured_camera_count = 0;
+    diagnostics.active_rtsp_session_total = 0;
+    diagnostics.active_decoder_total = 0;
+  }
+  return diagnostics;
+}
+
 bool WaitForReceiving(rch_engine_handle engine,
                       const char* camera_id,
                       std::chrono::milliseconds timeout,
@@ -177,6 +190,8 @@ bool Exercise2_4_8CameraScale(const std::vector<LoopbackRtspFixture>& fixtures)
     }
 
     if (passed) {
+      std::uint32_t rtsp_sum = 0;
+      std::uint32_t decoder_sum = 0;
       for (std::size_t i = 0; i < count; ++i) {
         rch_camera_status_v1 status{};
         if (!Expect(WaitForReceiving(engine, camera_ids[i].c_str(), std::chrono::seconds(8), status),
@@ -185,6 +200,24 @@ bool Exercise2_4_8CameraScale(const std::vector<LoopbackRtspFixture>& fixtures)
                        "per-camera ownership must remain single-session and single-decoder")) {
           passed = false;
           break;
+        }
+        rtsp_sum += status.active_rtsp_session_count;
+        decoder_sum += status.active_decoder_count;
+      }
+
+      if (passed) {
+        const auto diagnostics = Diagnostics(engine);
+        if (!Expect(diagnostics.configured_camera_count == count,
+                    "aggregate diagnostics must reflect configured camera count")
+            || !Expect(diagnostics.active_rtsp_session_total == rtsp_sum,
+                       "aggregate diagnostics RTSP total must match per-camera ownership sum")
+            || !Expect(diagnostics.active_decoder_total == decoder_sum,
+                       "aggregate diagnostics decoder total must match per-camera ownership sum")
+            || !Expect(diagnostics.active_rtsp_session_total <= diagnostics.configured_camera_count,
+                       "aggregate RTSP ownership must never exceed configured camera count")
+            || !Expect(diagnostics.active_decoder_total <= diagnostics.configured_camera_count,
+                       "aggregate decoder ownership must never exceed configured camera count")) {
+          passed = false;
         }
       }
     }

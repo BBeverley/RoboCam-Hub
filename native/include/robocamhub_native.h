@@ -23,13 +23,15 @@ extern "C" {
 #endif
 
 #define RCH_ABI_VERSION_MAJOR UINT32_C(1)
-#define RCH_ABI_VERSION_MINOR UINT32_C(2)
+#define RCH_ABI_VERSION_MINOR UINT32_C(3)
 #define RCH_ABI_VERSION ((RCH_ABI_VERSION_MAJOR << 16U) | RCH_ABI_VERSION_MINOR)
 
 #define RCH_CAMERA_CONFIG_VERSION UINT32_C(1)
 #define RCH_CAMERA_STATUS_VERSION_V1 UINT32_C(1)
 #define RCH_CAMERA_STATUS_VERSION_V2 UINT32_C(2)
 #define RCH_CAMERA_STATUS_VERSION RCH_CAMERA_STATUS_VERSION_V2
+#define RCH_ENGINE_DIAGNOSTICS_VERSION_V1 UINT32_C(1)
+#define RCH_ENGINE_DIAGNOSTICS_VERSION RCH_ENGINE_DIAGNOSTICS_VERSION_V1
 #define RCH_NO_FRAME_AGE_MS UINT64_MAX
 
 /* Fixed-width result type with stable named error-code constants. */
@@ -47,7 +49,8 @@ enum rch_result_code {
   RCH_RESULT_GSTREAMER_ERROR = 8,
   RCH_RESULT_RTSP_FAILURE = 9,
   RCH_RESULT_DECODER_FAILURE = 10,
-  RCH_RESULT_CONNECTION_TIMEOUT = 11
+  RCH_RESULT_CONNECTION_TIMEOUT = 11,
+  RCH_RESULT_BUFFER_TOO_SMALL = 12
 };
 
 /* Fixed-width camera state type with stable named constants. */
@@ -106,6 +109,24 @@ typedef struct rch_camera_status_v1 {
   uint32_t next_retry_delay_ms;
   uint32_t reserved_v2;
 } rch_camera_status_v1;
+
+/* Low-frequency aggregate snapshot for the current configured camera registry.
+ * Callers must set struct_size and struct_version before querying.
+ * All counts reflect a point-in-time snapshot of configured logical cameras. */
+typedef struct rch_engine_diagnostics_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  uint32_t configured_camera_count;
+  uint32_t active_rtsp_session_total;
+  uint32_t active_decoder_total;
+  uint32_t cameras_starting_count;
+  uint32_t cameras_receiving_count;
+  uint32_t cameras_waiting_to_retry_count;
+  uint32_t cameras_failed_count;
+  uint32_t cameras_stopped_count;
+  uint32_t reserved;
+  uint64_t successful_reconnect_total;
+} rch_engine_diagnostics_v1;
 
 /* Opaque, native-owned handle. Create it with rch_engine_create and release it
  * exactly once with rch_engine_destroy. */
@@ -173,6 +194,27 @@ RCH_API rch_result rch_camera_get_status_by_id(
   rch_engine_handle engine,
   const char* camera_id_utf8,
   rch_camera_status_v1* out_status) RCH_NOEXCEPT;
+
+/* Enumerates configured logical camera IDs in deterministic lexical order.
+ * IDs are UTF-8, NUL-terminated, and densely packed in out_ids_utf8_buffer.
+ * out_required_buffer_size receives the required byte size for all IDs,
+ * including each trailing NUL terminator.
+ * If out_ids_utf8_buffer_size is too small, returns
+ * RCH_RESULT_BUFFER_TOO_SMALL and leaves caller memory unchanged.
+ * For count-only queries, pass out_ids_utf8_buffer as null with size zero. */
+RCH_API rch_result rch_camera_enumerate_ids(
+  rch_engine_handle engine,
+  char* out_ids_utf8_buffer,
+  uint32_t out_ids_utf8_buffer_size,
+  uint32_t* out_required_buffer_size,
+  uint32_t* out_camera_count) RCH_NOEXCEPT;
+
+/* Returns a low-frequency aggregate diagnostics snapshot for configured
+ * logical cameras.
+ * Callers must provide a versioned caller-owned buffer. */
+RCH_API rch_result rch_engine_get_diagnostics(
+  rch_engine_handle engine,
+  rch_engine_diagnostics_v1* out_diagnostics) RCH_NOEXCEPT;
 
 #if defined(__cplusplus)
 }

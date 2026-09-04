@@ -2,7 +2,7 @@ namespace RoboCamHub.NativeInterop;
 
 public readonly record struct NativeAbiVersion(ushort Major, ushort Minor)
 {
-    public static NativeAbiVersion Supported { get; } = new(1, 2);
+    public static NativeAbiVersion Supported { get; } = new(1, 3);
 
     internal static NativeAbiVersion FromEncoded(uint value)
         => new((ushort)(value >> 16), (ushort)value);

@@ -1,6 +1,6 @@
 namespace RoboCamHub.NativeInterop;
 
-internal enum NativeResult : int
+public enum NativeResult : int
 {
     Ok = 0,
     InvalidArgument = 1,
@@ -14,4 +14,5 @@ internal enum NativeResult : int
     RtspFailure = 9,
     DecoderFailure = 10,
     ConnectionTimeout = 11,
+    BufferTooSmall = 12,
 }

@@ -231,6 +231,30 @@ A PR should explain:
 
 Do not mix unrelated cleanup into a feature PR.
 
+### PR synchronisation after every push
+
+Whenever an agent pushes commits to a task branch that has an open pull request, the agent must synchronise the PR before reporting the push as complete.
+
+After **every push**:
+
+1. Confirm the remote branch/head SHA matches the commit that was just pushed.
+2. Update the existing PR body so it reflects the **current branch state**, not only the original implementation. Keep it concise but current, including:
+   - implementation summary;
+   - important follow-up fixes made since the PR was opened;
+   - tests/builds actually run and their results;
+   - CI status if known;
+   - deferred hardware/manual validation;
+   - known limitations or unresolved review points.
+3. Prefer editing the PR body over posting a new progress comment for every push. Use comments only when preserving review discussion or an audit trail is useful.
+4. If the implementation is complete, self-audited against the issue, and no known blocker remains, mark a draft PR **Ready for Review**. Do **not** mark an incomplete/WIP PR ready merely because a push occurred.
+5. Check/report the current CI/check state for the pushed head. If checks are pending, say they are pending; do not claim them green.
+6. Report the PR number/URL, pushed head SHA, draft/ready state, and current CI state in the completion/update message.
+7. Never merge the PR. Merge remains a human approval step unless the user explicitly changes this policy.
+
+If no PR exists yet, continue normal task work. When the task reaches the point where the issue/workflow requires a PR, open it with a complete description and apply the same synchronisation rules to subsequent pushes.
+
+A push is not considered fully handed off until the corresponding open PR accurately describes the code currently on that branch.
+
 ## 15. When to stop and ask
 
 Stop and report rather than guessing when a task would require:

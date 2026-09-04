@@ -2,14 +2,25 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
   RoboCamHubNative
-  VERSION 0.1.0
-  DESCRIPTION "RoboCam Hub native media-core lifecycle skeleton"
+  VERSION 0.2.0
+  DESCRIPTION "RoboCam Hub native GStreamer media core"
   LANGUAGES C CXX
 )
 
 include(CTest)
 
 option(RCH_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(RCH_BUILD_INGEST_PROBE "Build the manual single-camera diagnostics probe" ON)
+
+find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
+pkg_check_modules(
+  GSTREAMER
+  REQUIRED
+  IMPORTED_TARGET
+  gstreamer-1.0>=1.24
+  gstreamer-app-1.0>=1.24
+)
 
 # Keep Windows test executables beside the shared-library DLL. The same layout
 # also gives macOS and other generators predictable build artefact locations.
@@ -40,6 +51,8 @@ endfunction()
 
 add_library(robocamhub_native SHARED
   src/engine/robocamhub_native.cpp
+  src/frames/latest_frame.cpp
+  src/ingest/single_camera_ingest.cpp
 )
 
 target_compile_features(robocamhub_native PRIVATE cxx_std_20)
@@ -48,7 +61,10 @@ target_include_directories(robocamhub_native
   PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<INSTALL_INTERFACE:include>"
+  PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
+target_link_libraries(robocamhub_native PRIVATE PkgConfig::GSTREAMER Threads::Threads)
 
 set_target_properties(robocamhub_native PROPERTIES
   CXX_EXTENSIONS OFF
@@ -65,6 +81,14 @@ endif()
 
 rch_enable_project_warnings(robocamhub_native)
 rch_enable_sanitizers(robocamhub_native)
+
+if(RCH_BUILD_INGEST_PROBE)
+  add_executable(robocamhub_ingest_probe tools/ingest_probe.cpp)
+  target_compile_features(robocamhub_ingest_probe PRIVATE cxx_std_20)
+  target_link_libraries(robocamhub_ingest_probe PRIVATE robocamhub_native)
+  set_target_properties(robocamhub_ingest_probe PROPERTIES CXX_EXTENSIONS OFF)
+  rch_enable_project_warnings(robocamhub_ingest_probe)
+endif()
 
 if(BUILD_TESTING)
   add_subdirectory(tests)

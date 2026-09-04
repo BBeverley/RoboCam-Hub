@@ -14,3 +14,42 @@ rch_enable_project_warnings(robocamhub_native_tests)
 rch_enable_sanitizers(robocamhub_native_tests)
 
 add_test(NAME robocamhub_native.lifecycle COMMAND robocamhub_native_tests)
+
+add_executable(robocamhub_ingest_abi_tests
+  ingest_abi_test.cpp
+)
+
+target_compile_features(robocamhub_ingest_abi_tests PRIVATE cxx_std_20)
+target_link_libraries(robocamhub_ingest_abi_tests PRIVATE robocamhub_native)
+set_target_properties(robocamhub_ingest_abi_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_ingest_abi_tests)
+rch_enable_sanitizers(robocamhub_ingest_abi_tests)
+
+add_test(NAME robocamhub_native.single_camera_ingest COMMAND robocamhub_ingest_abi_tests)
+set_tests_properties(robocamhub_native.single_camera_ingest PROPERTIES TIMEOUT 15)
+
+add_executable(robocamhub_latest_frame_tests
+  latest_frame_test.cpp
+  ../src/frames/latest_frame.cpp
+)
+
+target_compile_features(robocamhub_latest_frame_tests PRIVATE cxx_std_20)
+target_include_directories(robocamhub_latest_frame_tests PRIVATE ../src)
+target_link_libraries(robocamhub_latest_frame_tests PRIVATE PkgConfig::GSTREAMER)
+set_target_properties(robocamhub_latest_frame_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_latest_frame_tests)
+rch_enable_sanitizers(robocamhub_latest_frame_tests)
+
+add_test(NAME robocamhub_native.latest_frame COMMAND robocamhub_latest_frame_tests)
+
+# The RTSP server and x264 encoder are fixture-only dependencies, never part of
+# the production client pipeline or the managed layer.
+pkg_check_modules(GSTREAMER_RTSP_SERVER REQUIRED IMPORTED_TARGET gstreamer-rtsp-server-1.0>=1.24)
+add_executable(robocamhub_rtsp_fixture_tests rtsp_fixture_test.cpp)
+target_compile_features(robocamhub_rtsp_fixture_tests PRIVATE cxx_std_20)
+target_link_libraries(robocamhub_rtsp_fixture_tests PRIVATE robocamhub_native PkgConfig::GSTREAMER_RTSP_SERVER Threads::Threads)
+set_target_properties(robocamhub_rtsp_fixture_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_rtsp_fixture_tests)
+rch_enable_sanitizers(robocamhub_rtsp_fixture_tests)
+add_test(NAME robocamhub_native.loopback_rtsp COMMAND robocamhub_rtsp_fixture_tests)
+set_tests_properties(robocamhub_native.loopback_rtsp PROPERTIES TIMEOUT 40)

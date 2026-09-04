@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -50,10 +51,38 @@ GStreamerRuntime& Runtime()
 
 }  // namespace
 
+struct CameraEntry final {
+  explicit CameraEntry(std::shared_ptr<robocamhub::ingest::SingleCameraIngest> ingest)
+      : ingest(std::move(ingest))
+  {
+  }
+
+  std::shared_ptr<robocamhub::ingest::SingleCameraIngest> ingest;
+  std::mutex lifecycle_mutex;
+  std::atomic<bool> removed{false};
+  std::atomic<std::uint64_t> generation{0};
+};
+
+namespace {
+
+bool CanProceedWithEntry(const std::shared_ptr<CameraEntry>& entry,
+                         std::uint64_t expected_generation)
+{
+  if (entry == nullptr || entry->ingest == nullptr) {
+    return false;
+  }
+  if (entry->removed.load(std::memory_order_acquire)) {
+    return false;
+  }
+  return entry->generation.load(std::memory_order_acquire) == expected_generation;
+}
+
+}  // namespace
+
 struct rch_engine {
   uint32_t abi_version{RCH_ABI_VERSION};
   std::mutex camera_registry_mutex_;
-  std::unordered_map<std::string, std::shared_ptr<robocamhub::ingest::SingleCameraIngest>> cameras_;
+  std::unordered_map<std::string, std::shared_ptr<CameraEntry>> cameras_;
   robocamhub::ingest::SingleCameraIngest camera;
 };
 
@@ -63,7 +92,7 @@ bool IsValidCameraIdUtf8(const char* value)
     && g_utf8_validate(value, -1, nullptr) != FALSE;
 }
 
-std::shared_ptr<robocamhub::ingest::SingleCameraIngest> FindCameraById(
+std::shared_ptr<CameraEntry> FindCameraById(
   rch_engine_handle engine,
   const char* camera_id_utf8)
 {
@@ -111,21 +140,25 @@ extern "C" rch_result rch_engine_destroy(rch_engine_handle engine) noexcept
   }
 
   try {
-    std::vector<std::shared_ptr<robocamhub::ingest::SingleCameraIngest>> cameras;
+    std::vector<std::shared_ptr<CameraEntry>> camera_entries;
     {
       std::lock_guard lock(engine->camera_registry_mutex_);
-      cameras.reserve(engine->cameras_.size());
-      for (auto& [camera_id, camera] : engine->cameras_) {
+      camera_entries.reserve(engine->cameras_.size());
+      for (auto& [camera_id, entry] : engine->cameras_) {
         (void)camera_id;
-        cameras.push_back(camera);
+        camera_entries.push_back(entry);
       }
       engine->cameras_.clear();
     }
 
-    for (auto& camera : cameras) {
-      if (camera != nullptr) {
-        camera->Stop();
+    for (auto& entry : camera_entries) {
+      if (entry == nullptr || entry->ingest == nullptr) {
+        continue;
       }
+      std::unique_lock lock(entry->lifecycle_mutex);
+      entry->removed.store(true, std::memory_order_release);
+      entry->generation.fetch_add(1U, std::memory_order_acq_rel);
+      entry->ingest->Stop();
     }
 
     engine->camera.Stop();
@@ -174,19 +207,31 @@ extern "C" rch_result rch_camera_add(
       return RCH_RESULT_INVALID_ARGUMENT;
     }
 
-    std::shared_ptr<robocamhub::ingest::SingleCameraIngest> camera;
+    std::shared_ptr<CameraEntry> entry;
     {
       std::lock_guard lock(engine->camera_registry_mutex_);
       auto found = engine->cameras_.find(config->camera_id_utf8);
       if (found != engine->cameras_.end()) {
-        camera = found->second;
+        entry = found->second;
       } else {
-        camera = std::make_shared<robocamhub::ingest::SingleCameraIngest>();
-        engine->cameras_[config->camera_id_utf8] = camera;
+        entry = std::make_shared<CameraEntry>(std::make_shared<robocamhub::ingest::SingleCameraIngest>());
+        engine->cameras_[config->camera_id_utf8] = entry;
       }
     }
 
-    return camera->Configure(*config);
+    std::unique_lock lifecycle_lock(entry->lifecycle_mutex);
+    if (entry->removed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_NOT_CONFIGURED;
+    }
+    const auto generation = entry->generation.load(std::memory_order_acquire);
+    if (!CanProceedWithEntry(entry, generation)) {
+      return RCH_RESULT_NOT_CONFIGURED;
+    }
+    auto result = entry->ingest->Configure(*config);
+    if (result == RCH_RESULT_OK) {
+      entry->generation.fetch_add(1U, std::memory_order_acq_rel);
+    }
+    return result;
   } catch (const std::bad_alloc&) {
     return RCH_RESULT_OUT_OF_MEMORY;
   } catch (...) {
@@ -206,18 +251,21 @@ extern "C" rch_result rch_camera_remove(
   }
 
   try {
-    std::shared_ptr<robocamhub::ingest::SingleCameraIngest> camera;
+    std::shared_ptr<CameraEntry> entry;
     {
       std::lock_guard lock(engine->camera_registry_mutex_);
       const auto found = engine->cameras_.find(camera_id_utf8);
       if (found == engine->cameras_.end()) {
         return RCH_RESULT_NOT_CONFIGURED;
       }
-      camera = found->second;
+      entry = found->second;
       engine->cameras_.erase(found);
     }
 
-    camera->Stop();
+    std::unique_lock lifecycle_lock(entry->lifecycle_mutex);
+    entry->removed.store(true, std::memory_order_release);
+    entry->generation.fetch_add(1U, std::memory_order_acq_rel);
+    entry->ingest->Stop();
     return RCH_RESULT_OK;
   } catch (const std::bad_alloc&) {
     return RCH_RESULT_OUT_OF_MEMORY;
@@ -252,13 +300,22 @@ extern "C" rch_result rch_camera_start_by_id(
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
-  const auto camera = FindCameraById(engine, camera_id_utf8);
-  if (camera == nullptr) {
+  const auto entry = FindCameraById(engine, camera_id_utf8);
+  if (entry == nullptr || entry->ingest == nullptr) {
     return RCH_RESULT_NOT_CONFIGURED;
   }
 
   try {
-    return camera->Start();
+    std::unique_lock lifecycle_lock(entry->lifecycle_mutex);
+    const auto generation = entry->generation.load(std::memory_order_acquire);
+    if (!CanProceedWithEntry(entry, generation)) {
+      return RCH_RESULT_NOT_CONFIGURED;
+    }
+    const auto result = entry->ingest->Start();
+    if (result == RCH_RESULT_OK && entry->generation.load(std::memory_order_acquire) != generation) {
+      return RCH_RESULT_NOT_CONFIGURED;
+    }
+    return result;
   } catch (const std::bad_alloc&) {
     return RCH_RESULT_OUT_OF_MEMORY;
   } catch (...) {
@@ -290,13 +347,22 @@ extern "C" rch_result rch_camera_stop_by_id(
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
-  const auto camera = FindCameraById(engine, camera_id_utf8);
-  if (camera == nullptr) {
+  const auto entry = FindCameraById(engine, camera_id_utf8);
+  if (entry == nullptr || entry->ingest == nullptr) {
     return RCH_RESULT_NOT_CONFIGURED;
   }
 
   try {
-    return camera->Stop();
+    std::unique_lock lifecycle_lock(entry->lifecycle_mutex);
+    const auto generation = entry->generation.load(std::memory_order_acquire);
+    if (!CanProceedWithEntry(entry, generation)) {
+      return RCH_RESULT_NOT_CONFIGURED;
+    }
+    const auto result = entry->ingest->Stop();
+    if (result == RCH_RESULT_OK && entry->generation.load(std::memory_order_acquire) != generation) {
+      return RCH_RESULT_NOT_CONFIGURED;
+    }
+    return result;
   } catch (...) {
     return RCH_RESULT_INTERNAL_ERROR;
   }
@@ -355,8 +421,12 @@ extern "C" rch_result rch_camera_get_status_by_id(
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
-  const auto camera = FindCameraById(engine, camera_id_utf8);
-  if (camera == nullptr) {
+  const auto entry = FindCameraById(engine, camera_id_utf8);
+  if (entry == nullptr || entry->ingest == nullptr) {
+    return RCH_RESULT_NOT_CONFIGURED;
+  }
+
+  if (entry->removed.load(std::memory_order_acquire)) {
     return RCH_RESULT_NOT_CONFIGURED;
   }
 
@@ -375,7 +445,12 @@ extern "C" rch_result rch_camera_get_status_by_id(
 
   try {
     rch_camera_status_v1 full_status{};
-    camera->FillStatus(full_status);
+    std::unique_lock lifecycle_lock(entry->lifecycle_mutex);
+    const auto generation = entry->generation.load(std::memory_order_acquire);
+    if (!CanProceedWithEntry(entry, generation)) {
+      return RCH_RESULT_NOT_CONFIGURED;
+    }
+    entry->ingest->FillStatus(full_status);
     full_status.struct_size = status_v2_ok
       ? static_cast<uint32_t>(sizeof(rch_camera_status_v1))
       : status_v1_size;

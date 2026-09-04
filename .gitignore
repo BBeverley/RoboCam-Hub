@@ -5,4 +5,5 @@
 .vs/
 *.user
 native/build/
+native/build-*/
 cmake-build-*/

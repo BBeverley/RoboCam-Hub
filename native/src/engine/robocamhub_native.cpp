@@ -1,9 +1,52 @@
 #include "robocamhub_native.h"
 
-#include <cstdlib>
+#include "ingest/single_camera_ingest.h"
+
+#include <gst/gst.h>
+
+#include <cstddef>
+#include <new>
+
+namespace {
+
+class GStreamerRuntime final {
+public:
+  GStreamerRuntime()
+  {
+    GError* error = nullptr;
+    initialized_ = gst_init_check(nullptr, nullptr, &error) != FALSE;
+    if (error != nullptr) {
+      g_error_free(error);
+    }
+  }
+
+  ~GStreamerRuntime()
+  {
+    if (initialized_) {
+      gst_deinit();
+    }
+  }
+
+  [[nodiscard]] bool IsInitialized() const
+  {
+    return initialized_;
+  }
+
+private:
+  bool initialized_{false};
+};
+
+GStreamerRuntime& Runtime()
+{
+  static GStreamerRuntime runtime;
+  return runtime;
+}
+
+}  // namespace
 
 struct rch_engine {
-  uint32_t abi_version;
+  uint32_t abi_version{RCH_ABI_VERSION};
+  robocamhub::ingest::SingleCameraIngest camera;
 };
 
 extern "C" uint32_t rch_get_abi_version(void) noexcept
@@ -18,15 +61,17 @@ extern "C" rch_result rch_engine_create(rch_engine_handle* out_engine) noexcept
   }
 
   *out_engine = nullptr;
-
-  auto* engine = static_cast<rch_engine*>(std::malloc(sizeof(rch_engine)));
-  if (engine == nullptr) {
+  try {
+    if (!Runtime().IsInitialized()) {
+      return RCH_RESULT_GSTREAMER_ERROR;
+    }
+    *out_engine = new rch_engine();
+    return RCH_RESULT_OK;
+  } catch (const std::bad_alloc&) {
     return RCH_RESULT_OUT_OF_MEMORY;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
   }
-
-  engine->abi_version = RCH_ABI_VERSION;
-  *out_engine = engine;
-  return RCH_RESULT_OK;
 }
 
 extern "C" rch_result rch_engine_destroy(rch_engine_handle engine) noexcept
@@ -35,6 +80,77 @@ extern "C" rch_result rch_engine_destroy(rch_engine_handle engine) noexcept
     return RCH_RESULT_INVALID_HANDLE;
   }
 
-  std::free(engine);
+  delete engine;
   return RCH_RESULT_OK;
+}
+
+extern "C" rch_result rch_camera_configure(
+  rch_engine_handle engine,
+  const rch_camera_config_v1* config) noexcept
+{
+  if (engine == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (config == nullptr || config->struct_size < sizeof(rch_camera_config_v1)
+      || config->struct_version != RCH_CAMERA_CONFIG_VERSION) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  try {
+    return engine->camera.Configure(*config);
+  } catch (const std::bad_alloc&) {
+    return RCH_RESULT_OUT_OF_MEMORY;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_camera_start(rch_engine_handle engine) noexcept
+{
+  if (engine == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+
+  try {
+    return engine->camera.Start();
+  } catch (const std::bad_alloc&) {
+    return RCH_RESULT_OUT_OF_MEMORY;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_camera_stop(rch_engine_handle engine) noexcept
+{
+  if (engine == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+
+  try {
+    return engine->camera.Stop();
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_camera_get_status(
+  rch_engine_handle engine,
+  rch_camera_status_v1* out_status) noexcept
+{
+  if (engine == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_status == nullptr || out_status->struct_size < sizeof(rch_camera_status_v1)
+      || out_status->struct_version != RCH_CAMERA_STATUS_VERSION) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  try {
+    engine->camera.FillStatus(*out_status);
+    out_status->struct_size = static_cast<uint32_t>(sizeof(rch_camera_status_v1));
+    out_status->struct_version = RCH_CAMERA_STATUS_VERSION;
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
 }

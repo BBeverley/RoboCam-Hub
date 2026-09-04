@@ -50,9 +50,16 @@ Start with:
 
 A low-latency GStreamer RTSP workflow has already been proven against RoboSpot camera feeds and can get substantially closer to RoboSpot BaseStation latency than generic OBS RTSP ingest. The next validation step is to prove the complete RTSP → compositor → NDI → grandMA3 chain and measure the latency budget at each stage.
 
-## Gate 0 build and test
+## Native media dependencies
 
-Gate 0 validation requires the .NET 10 SDK, CMake 3.25 or newer and a C/C++ toolchain. These commands are the local equivalents of CI:
+Gate 1A requires the official GStreamer runtime and development SDK. See
+[`docs/23-gate-1a-real-camera-test.md`](docs/23-gate-1a-real-camera-test.md) for
+the pinned CI dependency strategy and the deferred RoboSpot camera procedure.
+
+## Build and test
+
+Validation requires the .NET 10 SDK, CMake 3.25 or newer, a C/C++ toolchain and
+GStreamer 1.24 or newer. These commands are the local equivalents of CI:
 
 ```shell
 cmake -S native -B native/build -DBUILD_TESTING=ON

@@ -129,17 +129,49 @@ RCH_API rch_result rch_camera_configure(
   rch_engine_handle engine,
   const rch_camera_config_v1* config) RCH_NOEXCEPT;
 
+/* Adds or overwrites a camera configuration keyed by camera_id. If the camera
+ * already exists, the managed engine reuses the same logical camera slot and does
+ * not create a second RTSP session or decoder until a separate start call. */
+RCH_API rch_result rch_camera_add(
+  rch_engine_handle engine,
+  const rch_camera_config_v1* config) RCH_NOEXCEPT;
+
+/* Removes the named camera if present and tears down its active pipeline before
+ * releasing the registry entry. */
+RCH_API rch_result rch_camera_remove(
+  rch_engine_handle engine,
+  const char* camera_id_utf8) RCH_NOEXCEPT;
+
 /* Starts the configured embedded GStreamer RTSP/H.264 pipeline. A repeated
  * start while active returns RCH_RESULT_ALREADY_STARTED without creating
  * another RTSP session or decoder. */
 RCH_API rch_result rch_camera_start(rch_engine_handle engine) RCH_NOEXCEPT;
 
+/* Starts the camera identified by camera_id without creating a new RTSP session or
+ * decoder for an already-running logical camera. */
+RCH_API rch_result rch_camera_start_by_id(
+  rch_engine_handle engine,
+  const char* camera_id_utf8) RCH_NOEXCEPT;
+
 /* Stops the camera pipeline and releases its session and decoder ownership. */
 RCH_API rch_result rch_camera_stop(rch_engine_handle engine) RCH_NOEXCEPT;
+
+/* Stops the named camera and releases its session/decoder ownership without
+ * affecting any other registered camera. */
+RCH_API rch_result rch_camera_stop_by_id(
+  rch_engine_handle engine,
+  const char* camera_id_utf8) RCH_NOEXCEPT;
 
 /* Returns a point-in-time status/counter snapshot. */
 RCH_API rch_result rch_camera_get_status(
   rch_engine_handle engine,
+  rch_camera_status_v1* out_status) RCH_NOEXCEPT;
+
+/* Returns the status for the named camera. Invalid camera IDs or stale handles
+ * return RCH_RESULT_INVALID_ARGUMENT or RCH_RESULT_INVALID_HANDLE. */
+RCH_API rch_result rch_camera_get_status_by_id(
+  rch_engine_handle engine,
+  const char* camera_id_utf8,
   rch_camera_status_v1* out_status) RCH_NOEXCEPT;
 
 #if defined(__cplusplus)

@@ -567,7 +567,6 @@ extern "C" rch_result rch_engine_get_diagnostics(
     diagnostics.struct_version = RCH_ENGINE_DIAGNOSTICS_VERSION_V1;
 
     const auto cameras = SnapshotSortedCameras(engine);
-    diagnostics.configured_camera_count = static_cast<uint32_t>(cameras.size());
 
     for (const auto& [camera_id, entry] : cameras) {
       (void)camera_id;
@@ -582,6 +581,7 @@ extern "C" rch_result rch_engine_get_diagnostics(
 
       rch_camera_status_v1 status{};
       entry->ingest->FillStatus(status);
+      diagnostics.configured_camera_count += 1U;
       diagnostics.active_rtsp_session_total += status.active_rtsp_session_count;
       diagnostics.active_decoder_total += status.active_decoder_count;
       diagnostics.successful_reconnect_total += status.successful_reconnect_count;

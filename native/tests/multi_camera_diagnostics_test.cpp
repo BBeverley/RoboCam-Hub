@@ -263,6 +263,15 @@ int main()
     return 1;
   }
 
+  rch_camera_config_v1 readd_cam_c_config{
+    static_cast<std::uint32_t>(sizeof(rch_camera_config_v1)),
+    RCH_CAMERA_CONFIG_VERSION,
+    "cam-c",
+    "rtsp://127.0.0.1:1/profile2/media.smp",
+    250,
+    0,
+  };
+
   std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
   const std::vector<std::string> active_ids{"cam-a", "cam-b", "cam-c"};
@@ -308,8 +317,14 @@ int main()
   const uint32_t stopped_or_stopping_sum =
     SumStateCountFromStatuses(statuses, RCH_CAMERA_STATE_STOPPED)
     + SumStateCountFromStatuses(statuses, RCH_CAMERA_STATE_STOPPING);
+  const uint32_t diagnostics_state_bucket_sum =
+    diagnostics.cameras_starting_count + diagnostics.cameras_receiving_count
+    + diagnostics.cameras_waiting_to_retry_count + diagnostics.cameras_failed_count
+    + diagnostics.cameras_stopped_count;
 
-  if (!Expect(diagnostics.cameras_starting_count == starting_sum,
+  if (!Expect(diagnostics.configured_camera_count == diagnostics_state_bucket_sum,
+              "aggregate configured count must equal the sum of state buckets")
+      || !Expect(diagnostics.cameras_starting_count == starting_sum,
               "aggregate starting count must match per-camera status states")
       || !Expect(diagnostics.cameras_receiving_count == receiving_sum,
                  "aggregate receiving count must match per-camera status states")
@@ -338,7 +353,12 @@ int main()
       local.struct_size = static_cast<std::uint32_t>(sizeof(local));
       local.struct_version = RCH_ENGINE_DIAGNOSTICS_VERSION;
       const auto diagnostics_result = rch_engine_get_diagnostics(engine, &local);
+      const auto state_bucket_sum =
+        local.cameras_starting_count + local.cameras_receiving_count
+        + local.cameras_waiting_to_retry_count + local.cameras_failed_count
+        + local.cameras_stopped_count;
       if (diagnostics_result != RCH_RESULT_OK
+          || local.configured_camera_count != state_bucket_sum
           || local.active_rtsp_session_total > local.configured_camera_count
           || local.active_decoder_total > local.configured_camera_count) {
         worker_failed.store(true, std::memory_order_release);
@@ -354,7 +374,7 @@ int main()
       break;
     }
 
-    const auto add_result = rch_camera_add(engine, &readd_config);
+    const auto add_result = rch_camera_add(engine, &readd_cam_c_config);
     if (add_result != RCH_RESULT_OK) {
       worker_failed.store(true, std::memory_order_release);
       break;

@@ -5,6 +5,7 @@
 #include <gst/gst.h>
 
 #include <cstddef>
+#include <cstring>
 #include <new>
 
 namespace {
@@ -154,13 +155,17 @@ extern "C" rch_result rch_camera_get_status(
   }
 
   try {
-    engine->camera.FillStatus(*out_status);
-    out_status->struct_size = status_v2_ok
+    rch_camera_status_v1 full_status{};
+    engine->camera.FillStatus(full_status);
+    full_status.struct_size = status_v2_ok
       ? static_cast<uint32_t>(sizeof(rch_camera_status_v1))
       : status_v1_size;
-    out_status->struct_version = status_v2_ok
+    full_status.struct_version = status_v2_ok
       ? RCH_CAMERA_STATUS_VERSION_V2
       : RCH_CAMERA_STATUS_VERSION_V1;
+
+    const auto bytes_to_copy = status_v2_ok ? sizeof(rch_camera_status_v1) : status_v1_size;
+    std::memcpy(out_status, &full_status, bytes_to_copy);
     return RCH_RESULT_OK;
   } catch (...) {
     return RCH_RESULT_INTERNAL_ERROR;

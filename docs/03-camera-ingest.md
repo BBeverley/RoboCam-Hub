@@ -275,6 +275,62 @@ snapshot APIs, but media frame ownership remains native:
 - no per-frame callbacks for ingest video frames;
 - no full-frame copy loop across the ABI for diagnostics.
 
+## Gate 3A shared latest-frame fan-out semantics
+
+Gate 3A formalises native fan-out ownership over the per-camera latest-frame
+slot.
+
+For one configured logical camera:
+
+```text
+1 camera ID
+= 1 RTSP session owner
+= 1 decode pipeline owner
+= 1 latest-frame source
+```
+
+Any number of native consumers may read that source concurrently without
+creating another session/pipeline.
+
+### Frame lease lifetime
+
+- frame reads use explicit native lease ownership;
+- replacing the latest frame never queues history;
+- older frame storage remains valid only while at least one lease still
+  references it;
+- once the final lease releases, replaced storage is reclaimed;
+- slow consumers do not back-pressure ingest and do not receive backlog replay.
+
+### View/source ownership foundation
+
+Gate 3A introduces a minimal native View ownership object with source slots
+bound by logical camera ID.
+
+- binding a camera ID to a View source slot reuses the same latest-frame source;
+- unbinding or destroying a View releases only the binding/consumer reference;
+- View operations must never start a new RTSP session or decoder;
+- camera removal marks bound consumers as stale/unavailable rather than causing
+  undefined ownership behaviour;
+- re-adding the same logical camera ID creates a fresh ingest owner and requires
+  explicit rebind/re-attach by callers.
+
+### Gate 3A diagnostics additions
+
+Per-camera status now includes:
+
+- direct frame-consumer count;
+- bound View-source count;
+- total native consumer count.
+
+Engine diagnostics now include:
+
+- View count;
+- aggregate direct frame-consumer count;
+- aggregate bound View-source count.
+
+These counters are low-frequency ownership diagnostics for tests and state
+inspection, not per-frame telemetry.
+
 ## Connection workflow
 
 For each enabled source, the camera manager should:

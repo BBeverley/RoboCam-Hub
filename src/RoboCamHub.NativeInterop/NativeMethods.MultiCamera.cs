@@ -34,6 +34,10 @@ internal struct NativeCameraStatusV1
     public uint successful_reconnect_count;
     public uint next_retry_delay_ms;
     public uint reserved_v2;
+    public uint direct_frame_consumer_count;
+    public uint bound_view_source_count;
+    public uint total_frame_consumer_count;
+    public uint reserved_v3;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -51,13 +55,17 @@ internal struct NativeEngineDiagnosticsV1
     public uint cameras_stopped_count;
     public uint reserved;
     public ulong successful_reconnect_total;
+    public uint view_count;
+    public uint direct_frame_consumer_count;
+    public uint total_bound_view_source_count;
+    public uint reserved_v2;
 }
 
 internal static partial class NativeMethods
 {
     internal const uint CameraConfigVersion = 1;
-    internal const uint CameraStatusVersion = 2;
-    internal const uint EngineDiagnosticsVersion = 1;
+    internal const uint CameraStatusVersion = 3;
+    internal const uint EngineDiagnosticsVersion = 2;
 
     [LibraryImport(LibraryName, EntryPoint = "rch_camera_add", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial NativeResult CameraAdd(NativeEngineHandle engine, in NativeCameraConfigV1 config);

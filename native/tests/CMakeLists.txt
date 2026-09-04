@@ -81,6 +81,15 @@ rch_enable_sanitizers(robocamhub_multicamera_diagnostics_tests)
 add_test(NAME robocamhub_native.multicamera_diagnostics COMMAND robocamhub_multicamera_diagnostics_tests)
 set_tests_properties(robocamhub_native.multicamera_diagnostics PROPERTIES TIMEOUT 30)
 
+add_executable(robocamhub_frame_fanout_tests frame_fanout_view_test.cpp)
+target_compile_features(robocamhub_frame_fanout_tests PRIVATE cxx_std_20)
+target_link_libraries(robocamhub_frame_fanout_tests PRIVATE robocamhub_native PkgConfig::GSTREAMER_RTSP_SERVER Threads::Threads)
+set_target_properties(robocamhub_frame_fanout_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_frame_fanout_tests)
+rch_enable_sanitizers(robocamhub_frame_fanout_tests)
+add_test(NAME robocamhub_native.frame_fanout COMMAND robocamhub_frame_fanout_tests)
+set_tests_properties(robocamhub_native.frame_fanout PROPERTIES TIMEOUT 60)
+
 # Compile the actual ingest implementation separately so deterministic scheduling
 # hooks and private test access never enter the shared library or exported ABI.
 add_executable(robocamhub_ingest_regression_tests

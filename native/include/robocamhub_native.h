@@ -23,15 +23,22 @@ extern "C" {
 #endif
 
 #define RCH_ABI_VERSION_MAJOR UINT32_C(1)
-#define RCH_ABI_VERSION_MINOR UINT32_C(3)
+#define RCH_ABI_VERSION_MINOR UINT32_C(4)
 #define RCH_ABI_VERSION ((RCH_ABI_VERSION_MAJOR << 16U) | RCH_ABI_VERSION_MINOR)
 
 #define RCH_CAMERA_CONFIG_VERSION UINT32_C(1)
 #define RCH_CAMERA_STATUS_VERSION_V1 UINT32_C(1)
 #define RCH_CAMERA_STATUS_VERSION_V2 UINT32_C(2)
-#define RCH_CAMERA_STATUS_VERSION RCH_CAMERA_STATUS_VERSION_V2
+#define RCH_CAMERA_STATUS_VERSION_V3 UINT32_C(3)
+#define RCH_CAMERA_STATUS_VERSION RCH_CAMERA_STATUS_VERSION_V3
 #define RCH_ENGINE_DIAGNOSTICS_VERSION_V1 UINT32_C(1)
-#define RCH_ENGINE_DIAGNOSTICS_VERSION RCH_ENGINE_DIAGNOSTICS_VERSION_V1
+#define RCH_ENGINE_DIAGNOSTICS_VERSION_V2 UINT32_C(2)
+#define RCH_ENGINE_DIAGNOSTICS_VERSION RCH_ENGINE_DIAGNOSTICS_VERSION_V2
+#define RCH_FRAME_LEASE_STATUS_VERSION_V1 UINT32_C(1)
+#define RCH_FRAME_LEASE_STATUS_VERSION RCH_FRAME_LEASE_STATUS_VERSION_V1
+#define RCH_VIEW_STATUS_VERSION_V1 UINT32_C(1)
+#define RCH_VIEW_STATUS_VERSION RCH_VIEW_STATUS_VERSION_V1
+#define RCH_VIEW_MAX_SOURCE_SLOTS UINT32_C(16)
 #define RCH_NO_FRAME_AGE_MS UINT64_MAX
 
 /* Fixed-width result type with stable named error-code constants. */
@@ -88,7 +95,8 @@ typedef struct rch_camera_config_v1 {
  * since local frame arrival, or RCH_NO_FRAME_AGE_MS if no frame exists.
  *
  * Version 1 includes fields up to latest_frame_age_ms.
- * Version 2 additively appends reconnect/backoff diagnostics. */
+ * Version 2 additively appends reconnect/backoff diagnostics.
+ * Version 3 additively appends frame-consumer and View binding counts. */
 typedef struct rch_camera_status_v1 {
   uint32_t struct_size;
   uint32_t struct_version;
@@ -108,6 +116,10 @@ typedef struct rch_camera_status_v1 {
   uint32_t successful_reconnect_count;
   uint32_t next_retry_delay_ms;
   uint32_t reserved_v2;
+  uint32_t direct_frame_consumer_count;
+  uint32_t bound_view_source_count;
+  uint32_t total_frame_consumer_count;
+  uint32_t reserved_v3;
 } rch_camera_status_v1;
 
 /* Low-frequency aggregate snapshot for the current configured camera registry.
@@ -126,11 +138,45 @@ typedef struct rch_engine_diagnostics_v1 {
   uint32_t cameras_stopped_count;
   uint32_t reserved;
   uint64_t successful_reconnect_total;
+  uint32_t view_count;
+  uint32_t direct_frame_consumer_count;
+  uint32_t total_bound_view_source_count;
+  uint32_t reserved_v2;
 } rch_engine_diagnostics_v1;
+
+/* Metadata snapshot for a leased latest frame reference. This type never
+ * exposes frame pixels. has_frame==0 means no decoded frame is currently
+ * available for the consumer's camera source. */
+typedef struct rch_frame_lease_status_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  uint32_t has_frame;
+  uint32_t width;
+  uint32_t height;
+  uint32_t reserved;
+  uint64_t decoded_frame_count;
+  uint64_t latest_frame_sequence;
+  uint64_t latest_frame_timestamp_ns;
+  uint64_t latest_frame_age_ms;
+} rch_frame_lease_status_v1;
+
+/* Point-in-time diagnostics for a minimal native View/source binding object. */
+typedef struct rch_view_status_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  uint32_t bound_source_count;
+  uint32_t sources_with_frame_count;
+  uint32_t stale_or_missing_source_count;
+  uint32_t reserved;
+  uint64_t last_observed_source_sequence;
+} rch_view_status_v1;
 
 /* Opaque, native-owned handle. Create it with rch_engine_create and release it
  * exactly once with rch_engine_destroy. */
 typedef struct rch_engine* rch_engine_handle;
+typedef struct rch_frame_consumer* rch_frame_consumer_handle;
+typedef struct rch_frame_lease* rch_frame_lease_handle;
+typedef struct rch_view* rch_view_handle;
 
 RCH_API uint32_t rch_get_abi_version(void) RCH_NOEXCEPT;
 
@@ -215,6 +261,60 @@ RCH_API rch_result rch_camera_enumerate_ids(
 RCH_API rch_result rch_engine_get_diagnostics(
   rch_engine_handle engine,
   rch_engine_diagnostics_v1* out_diagnostics) RCH_NOEXCEPT;
+
+/* Creates a native consumer bound to one configured logical camera ID.
+ * The consumer reads only the shared latest-frame source and never owns a
+ * separate RTSP session or decoder. */
+RCH_API rch_result rch_frame_consumer_create(
+  rch_engine_handle engine,
+  const char* camera_id_utf8,
+  rch_frame_consumer_handle* out_consumer) RCH_NOEXCEPT;
+
+/* Releases a frame consumer handle. */
+RCH_API rch_result rch_frame_consumer_destroy(
+  rch_frame_consumer_handle consumer) RCH_NOEXCEPT;
+
+/* Acquires a reference-counted lease to the newest currently available frame
+ * metadata for this consumer's camera source. */
+RCH_API rch_result rch_frame_consumer_acquire_latest(
+  rch_frame_consumer_handle consumer,
+  rch_frame_lease_handle* out_lease) RCH_NOEXCEPT;
+
+/* Returns metadata for a frame lease handle. */
+RCH_API rch_result rch_frame_lease_get_status(
+  rch_frame_lease_handle lease,
+  rch_frame_lease_status_v1* out_status) RCH_NOEXCEPT;
+
+/* Releases a frame lease handle. */
+RCH_API rch_result rch_frame_lease_destroy(
+  rch_frame_lease_handle lease) RCH_NOEXCEPT;
+
+/* Creates a minimal native View ownership object keyed by a stable view ID. */
+RCH_API rch_result rch_view_create(
+  rch_engine_handle engine,
+  const char* view_id_utf8,
+  rch_view_handle* out_view) RCH_NOEXCEPT;
+
+/* Destroys a native View ownership object and releases its source bindings. */
+RCH_API rch_result rch_view_destroy(
+  rch_view_handle view) RCH_NOEXCEPT;
+
+/* Binds one source slot of a native View to a logical camera ID.
+ * slot_index must be less than RCH_VIEW_MAX_SOURCE_SLOTS. */
+RCH_API rch_result rch_view_bind_camera_source(
+  rch_view_handle view,
+  uint32_t slot_index,
+  const char* camera_id_utf8) RCH_NOEXCEPT;
+
+/* Clears the logical camera binding for a source slot. */
+RCH_API rch_result rch_view_unbind_source(
+  rch_view_handle view,
+  uint32_t slot_index) RCH_NOEXCEPT;
+
+/* Returns point-in-time View/source diagnostics. */
+RCH_API rch_result rch_view_get_status(
+  rch_view_handle view,
+  rch_view_status_v1* out_status) RCH_NOEXCEPT;
 
 #if defined(__cplusplus)
 }

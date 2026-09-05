@@ -216,6 +216,31 @@ During a single-source outage, the View reported three live quadrants and one fr
 
 The proof used four independent local RTSP/H.264 sources rather than four physical cameras, and receiver traffic was loopback. Official-SDK runtime validation remains unverified on Windows and Apple Silicon, as do grandMA3 interoperability and remote-NIC behavior. The formal four-hour profiling soak remains deferred. The 10-minute RSS trend does not establish leak freedom.
 
+## Gate 5D multiple-output validation result
+
+Gate 5D exercised two independent native Views and multiple simultaneous
+official-SDK sender handles without changing the Gate 4A sender path. NDI Video
+Monitor 5.2 discovered `ROBOCAM - SPOTS A`, `ROBOCAM - SPOTS B` and a second
+`ROBOCAM - SPOTS B BACKUP` sender. The first two published different 1920×1080
+2×2 compositions concurrently; the backup independently published the same
+existing composed View B frame. Sequential receiver inspection was used while
+all senders remained active.
+
+Stopping and restarting Output A did not interrupt Output B, its View, the
+selected preview or camera ingest. Disconnecting and reconnecting the receiver
+did not recreate sender, View or ingest ownership. Switching the selected local
+preview between Views left the receiver's Output B content and routing intact.
+The four logical camera sources remained exactly four RTSP sessions and four
+decoders throughout. Each Output retained its own existing bounded sender
+worker/backend instance; no extra queue, compositor or managed frame path was
+introduced.
+
+The official SDK proof used NDI SDK 6.3.2.0 on macOS 14.7.1 x86_64 and local
+loopback RTSP/H.264 sources plus a loopback receiver. Windows and Apple Silicon
+official-SDK runtime behavior, remote receiver/NIC behavior, grandMA3 and a
+four-physical-camera proof remain unverified. See
+`docs/27-gate-5d-multiple-views-outputs.md` for measurements and artifact paths.
+
 ## View resolution vs output resolution
 
 A View and an NDI Output are independent.

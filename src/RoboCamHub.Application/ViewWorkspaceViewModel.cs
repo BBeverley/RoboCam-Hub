@@ -9,6 +9,7 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
     private ViewRuntimeState _state = ViewRuntimeState.Stopped;
     private string? _operatorMessage;
     private uint _renderFpsMilli;
+    private uint _outputConsumerCount;
 
     public ViewWorkspaceViewModel(
         ViewDefinition definition,
@@ -20,6 +21,7 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
         Slots = new ObservableCollection<ViewSlotViewModel>(
             Enumerable.Range(0, ViewDefinition.SlotCount)
                 .Select(slotIndex => new ViewSlotViewModel(
+                    definition.Id,
                     (uint)slotIndex,
                     definition.GetCameraId(slotIndex),
                     cameras,
@@ -61,6 +63,20 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
 
     public string RenderFpsText => $"{RenderFpsMilli / 1000.0:F1} fps";
 
+    public uint OutputConsumerCount
+    {
+        get => _outputConsumerCount;
+        private set
+        {
+            if (SetProperty(ref _outputConsumerCount, value))
+            {
+                RaisePropertyChanged(nameof(OutputConsumerText));
+            }
+        }
+    }
+
+    public string OutputConsumerText => $"Outputs {OutputConsumerCount}";
+
     public string? OperatorMessage
     {
         get => _operatorMessage;
@@ -77,20 +93,31 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
 
     internal void ApplySnapshot(WorkspaceRuntimeSnapshot snapshot)
     {
-        if (snapshot.View.IsSuccess)
+        if (!snapshot.Views.TryGetValue(Definition.Id, out var viewObservation))
         {
-            State = snapshot.View.Value!.Value.State;
-            RenderFpsMilli = snapshot.View.Value.Value.RenderFpsMilli;
+            OperatorMessage = $"View '{Definition.Name}' status is temporarily unavailable.";
+            return;
+        }
+
+        if (viewObservation.IsSuccess)
+        {
+            State = viewObservation.Value!.Value.State;
+            RenderFpsMilli = viewObservation.Value.Value.RenderFpsMilli;
+            OutputConsumerCount = viewObservation.Value.Value.OutputConsumerCount;
             OperatorMessage = null;
         }
         else
         {
-            OperatorMessage = snapshot.View.ErrorMessage;
+            OperatorMessage = viewObservation.ErrorMessage;
         }
 
+        if (!snapshot.ViewSources.TryGetValue(Definition.Id, out var sourceStatuses))
+        {
+            return;
+        }
         foreach (var slot in Slots)
         {
-            if (snapshot.ViewSources.TryGetValue(slot.SlotIndex, out var observation))
+            if (sourceStatuses.TryGetValue(slot.SlotIndex, out var observation))
             {
                 slot.ApplyStatus(observation);
             }

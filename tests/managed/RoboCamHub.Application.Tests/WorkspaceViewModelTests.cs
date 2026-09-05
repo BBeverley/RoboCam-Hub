@@ -28,6 +28,11 @@ public sealed class WorkspaceViewModelTests
         Assert.Equal(expectedText, workspace.Cameras[0].StateText);
         Assert.Equal(expectedIcon, workspace.Cameras[0].HealthIcon);
         Assert.False(string.IsNullOrWhiteSpace(workspace.Cameras[0].HealthColor));
+        var expectedOwnership = state == CameraRuntimeState.Receiving ? 1U : 0U;
+        Assert.Equal(expectedOwnership, workspace.Cameras[0].ActiveRtspSessionCount);
+        Assert.Equal(expectedOwnership, workspace.Cameras[0].ActiveDecoderCount);
+        Assert.Equal(expectedOwnership, workspace.ActiveRtspSessionTotal);
+        Assert.Equal(expectedOwnership, workspace.ActiveDecoderTotal);
     }
 
     [Fact]
@@ -81,7 +86,7 @@ public sealed class WorkspaceViewModelTests
             await release.Task;
         };
         await using var workspace = new WorkspaceViewModel(runtime);
-        var slot = workspace.View.Slots[0];
+        var slot = workspace.SelectedView.Slots[0];
         slot.SelectedCamera = workspace.Cameras[1];
 
         var assignment = slot.AssignCommand.ExecuteAsync();
@@ -100,7 +105,7 @@ public sealed class WorkspaceViewModelTests
         var camera = Camera("camera-1", "Spot 1");
         var runtime = new FakeWorkspaceRuntimeService([camera]);
         await using var workspace = new WorkspaceViewModel(runtime);
-        var slot = workspace.View.Slots[0];
+        var slot = workspace.SelectedView.Slots[0];
         slot.SelectedCamera = workspace.Cameras[0];
 
         await workspace.RefreshNowAsync();
@@ -121,7 +126,7 @@ public sealed class WorkspaceViewModelTests
             BindException = new InvalidOperationException("Binding rejected."),
         };
         await using var workspace = new WorkspaceViewModel(runtime);
-        var slot = workspace.View.Slots[0];
+        var slot = workspace.SelectedView.Slots[0];
         slot.SelectedCamera = workspace.Cameras[1];
 
         await slot.AssignCommand.ExecuteAsync();
@@ -139,7 +144,7 @@ public sealed class WorkspaceViewModelTests
             [camera],
             new ViewDefinition("view-main", "Main", camera.Id));
         await using var workspace = new WorkspaceViewModel(runtime);
-        var slot = workspace.View.Slots[0];
+        var slot = workspace.SelectedView.Slots[0];
 
         await slot.RemoveCommand.ExecuteAsync();
 
@@ -161,8 +166,8 @@ public sealed class WorkspaceViewModelTests
         await workspace.RefreshNowAsync();
 
         Assert.Equal("camera-1", definition.GetCameraId(0));
-        Assert.Equal("camera-2", workspace.View.Slots[0].AssignedCameraId);
-        Assert.Equal("Spot 2", workspace.View.Slots[0].AssignedCameraName);
+        Assert.Equal("camera-2", workspace.SelectedView.Slots[0].AssignedCameraId);
+        Assert.Equal("Spot 2", workspace.SelectedView.Slots[0].AssignedCameraName);
     }
 
     [Fact]
@@ -194,6 +199,247 @@ public sealed class WorkspaceViewModelTests
         var disabledRuntime = new FakeWorkspaceRuntimeService(output: Output(enabled: false));
         await using var disabledWorkspace = new WorkspaceViewModel(disabledRuntime);
         Assert.False(disabledWorkspace.Outputs[0].StartCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task MultipleViewsCanBeAddedSelectedAndConfiguredIndependently()
+    {
+        var camera = Camera("camera-1", "Spot 1");
+        var viewA = new ViewDefinition("view-a", "Spots A", camera.Id);
+        var viewB = new ViewDefinition("view-b", "Spots B");
+        var outputA = new OutputDefinition("output-a", "Output A", "ROBOCAM - A", viewA.Id);
+        var runtime = new FakeWorkspaceRuntimeService(
+            [camera],
+            views: [viewA, viewB],
+            outputs: [outputA]);
+        await using var workspace = new WorkspaceViewModel(runtime);
+        workspace.Preview.Attach(new PreviewHostSurface(PreviewHostPlatform.MacOSNsView, 42, 30));
+
+        workspace.PendingSelectedView = workspace.Views[1];
+        await workspace.SelectViewCommand.ExecuteAsync();
+        workspace.SelectedView.Slots[0].SelectedCamera = workspace.Cameras[0];
+        await workspace.SelectedView.Slots[0].AssignCommand.ExecuteAsync();
+
+        Assert.Equal("view-b", workspace.SelectedView.Definition.Id);
+        Assert.Equal("view-b", workspace.Preview.SelectedViewId);
+        Assert.Equal(1, runtime.PreviewSwitchCount);
+        Assert.Equal("camera-1", workspace.SelectedView.Slots[0].AssignedCameraId);
+        Assert.Equal("camera-1", viewA.GetCameraId(0));
+        Assert.Equal("view-a", workspace.Outputs[0].Definition.ViewId);
+    }
+
+    [Fact]
+    public async Task AddViewCreatesANamedStableDefinitionWithoutReplacingExistingViews()
+    {
+        var runtime = new FakeWorkspaceRuntimeService();
+        await using var workspace = new WorkspaceViewModel(runtime);
+        workspace.NewViewName = "Spots B";
+
+        await workspace.AddViewCommand.ExecuteAsync();
+
+        Assert.Equal(2, workspace.Views.Count);
+        Assert.Equal("Spots B", workspace.Views[1].Name);
+        Assert.StartsWith("view-", workspace.Views[1].Definition.Id, StringComparison.Ordinal);
+        Assert.Same(workspace.Views[1], workspace.PendingSelectedView);
+        Assert.Equal("view-main", workspace.SelectedView.Definition.Id);
+    }
+
+    [Fact]
+    public async Task PendingViewSelectionsSurvivePollingAndDoNotChangeOutputRouting()
+    {
+        var viewA = new ViewDefinition("view-a", "Spots A");
+        var viewB = new ViewDefinition("view-b", "Spots B");
+        var output = new OutputDefinition("output-a", "Output A", "ROBOCAM - A", viewA.Id);
+        var runtime = new FakeWorkspaceRuntimeService(
+            views: [viewA, viewB],
+            outputs: [output]);
+        await using var workspace = new WorkspaceViewModel(runtime);
+        workspace.PendingSelectedView = workspace.Views[1];
+        workspace.PendingOutputView = workspace.Views[1];
+
+        await workspace.RefreshNowAsync();
+
+        Assert.Same(workspace.Views[1], workspace.PendingSelectedView);
+        Assert.Same(workspace.Views[1], workspace.PendingOutputView);
+        Assert.Equal("view-a", workspace.SelectedView.Definition.Id);
+        Assert.Equal("view-a", workspace.Outputs[0].Definition.ViewId);
+    }
+
+    [Fact]
+    public async Task SharedCameraOutageAndRecoveryUpdatesBothViewsWithoutDuplicateOwnership()
+    {
+        var camera = Camera("camera-shared", "Shared Spot");
+        var viewA = new ViewDefinition("view-a", "Spots A", camera.Id);
+        var viewB = new ViewDefinition("view-b", "Spots B", camera.Id);
+        var runtime = new FakeWorkspaceRuntimeService([camera], views: [viewA, viewB]);
+        await using var workspace = new WorkspaceViewModel(runtime);
+        runtime.CameraStates[camera.Id] = CameraRuntimeState.WaitingToRetry;
+
+        await workspace.RefreshNowAsync();
+
+        Assert.All(
+            workspace.Views,
+            view => Assert.Equal(ViewSourceRuntimeState.FrozenLastGood, view.Slots[0].SourceState));
+        Assert.Equal(0U, workspace.ActiveRtspSessionTotal);
+        Assert.Equal(0U, workspace.ActiveDecoderTotal);
+
+        runtime.CameraStates[camera.Id] = CameraRuntimeState.Receiving;
+        await workspace.RefreshNowAsync();
+
+        Assert.All(workspace.Views, view => Assert.Equal(ViewSourceRuntimeState.Live, view.Slots[0].SourceState));
+        Assert.Equal(1U, workspace.ActiveRtspSessionTotal);
+        Assert.Equal(1U, workspace.ActiveDecoderTotal);
+    }
+
+    [Fact]
+    public async Task MultipleOutputsStartStopAndRestartIndependently()
+    {
+        var view = new ViewDefinition("view-main", "Main");
+        var outputA = new OutputDefinition("output-a", "Output A", "ROBOCAM - A", view.Id);
+        var outputB = new OutputDefinition("output-b", "Output B", "ROBOCAM - B", view.Id);
+        var runtime = new FakeWorkspaceRuntimeService(
+            views: [view],
+            outputs: [outputA, outputB]);
+        runtime.OutputStatuses[outputA.Id] = FakeWorkspaceRuntimeService.CreateOutputStatus(OutputRuntimeState.Running);
+        runtime.OutputStatuses[outputB.Id] = FakeWorkspaceRuntimeService.CreateOutputStatus(OutputRuntimeState.Running);
+        await using var workspace = new WorkspaceViewModel(runtime);
+        await workspace.RefreshNowAsync();
+
+        Assert.Equal(2U, workspace.SelectedView.OutputConsumerCount);
+        Assert.Equal("Outputs 2", workspace.SelectedView.OutputConsumerText);
+
+        await workspace.Outputs[0].StopCommand.ExecuteAsync();
+
+        Assert.Equal(OutputRuntimeState.Stopped, workspace.Outputs[0].State);
+        Assert.Equal(OutputRuntimeState.Running, workspace.Outputs[1].State);
+        Assert.Equal(1, runtime.StopOutputCallCounts[outputA.Id]);
+        Assert.False(runtime.StopOutputCallCounts.ContainsKey(outputB.Id));
+
+        await workspace.Outputs[0].RestartCommand.ExecuteAsync();
+
+        Assert.Equal(OutputRuntimeState.Starting, workspace.Outputs[0].State);
+        Assert.Equal(OutputRuntimeState.Running, workspace.Outputs[1].State);
+        Assert.Equal(1, runtime.StartOutputCallCounts[outputA.Id]);
+        Assert.False(runtime.StartOutputCallCounts.ContainsKey(outputB.Id));
+    }
+
+    [Fact]
+    public async Task SlowOutputOperationDoesNotSerializeAnUnrelatedOutput()
+    {
+        var view = new ViewDefinition("view-main", "Main");
+        var outputA = new OutputDefinition("output-a", "Output A", "ROBOCAM - A", view.Id);
+        var outputB = new OutputDefinition("output-b", "Output B", "ROBOCAM - B", view.Id);
+        var slowOutputEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSlowOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runtime = new FakeWorkspaceRuntimeService(
+            views: [view],
+            outputs: [outputA, outputB])
+        {
+            StartOutputHandlerById = async outputId =>
+            {
+                if (string.Equals(outputId, outputA.Id, StringComparison.Ordinal))
+                {
+                    slowOutputEntered.SetResult();
+                    await releaseSlowOutput.Task;
+                }
+            },
+        };
+        await using var workspace = new WorkspaceViewModel(runtime);
+
+        var slowStart = workspace.Outputs[0].StartCommand.ExecuteAsync();
+        await slowOutputEntered.Task;
+        await workspace.Outputs[1].StartCommand.ExecuteAsync();
+
+        Assert.False(slowStart.IsCompleted);
+        Assert.Equal(OutputRuntimeState.Starting, workspace.Outputs[1].State);
+        Assert.Equal(1, runtime.StartOutputCallCounts[outputB.Id]);
+
+        releaseSlowOutput.SetResult();
+        await slowStart;
+    }
+
+    [Fact]
+    public async Task PollingCollectionsRemainConsistentAfterViewAndOutputAdds()
+    {
+        var camera = Camera("camera-1", "Spot 1");
+        var runtime = new FakeWorkspaceRuntimeService([camera]);
+        await using var workspace = new WorkspaceViewModel(runtime);
+        workspace.NewViewName = "Spots B";
+
+        await workspace.AddViewCommand.ExecuteAsync();
+        workspace.PendingSelectedView = workspace.Views[1];
+        await workspace.SelectViewCommand.ExecuteAsync();
+        workspace.SelectedView.Slots[0].SelectedCamera = workspace.Cameras[0];
+        await workspace.SelectedView.Slots[0].AssignCommand.ExecuteAsync();
+        workspace.PendingOutputView = workspace.Views[1];
+        workspace.NewOutputName = "Spots B";
+        workspace.NewOutputNdiSourceName = "ROBOCAM - SPOTS B";
+        await workspace.AddOutputCommand.ExecuteAsync();
+        await workspace.RefreshNowAsync();
+
+        await workspace.SelectedView.Slots[0].RemoveCommand.ExecuteAsync();
+        await workspace.RefreshNowAsync();
+
+        var snapshot = await runtime.QueryStatusAsync();
+        Assert.Equal(2, snapshot.Views.Count);
+        Assert.Equal(2, snapshot.ViewSources.Count);
+        Assert.All(snapshot.Views.Keys, viewId => Assert.True(snapshot.ViewSources.ContainsKey(viewId)));
+        Assert.Single(snapshot.Outputs);
+        Assert.Equal(workspace.Views[1].Definition.Id, workspace.Outputs[0].Definition.ViewId);
+        Assert.Equal(4, snapshot.ViewSources[workspace.Views[1].Definition.Id].Count);
+        Assert.Equal(
+            ViewSourceRuntimeState.Unbound,
+            snapshot.ViewSources[workspace.Views[1].Definition.Id][0].Value!.Value.State);
+    }
+
+    [Fact]
+    public async Task OutputCreationRetainsItsChosenViewWhenLocalPreviewChanges()
+    {
+        var viewA = new ViewDefinition("view-a", "Spots A");
+        var viewB = new ViewDefinition("view-b", "Spots B");
+        var runtime = new FakeWorkspaceRuntimeService(views: [viewA, viewB]);
+        await using var workspace = new WorkspaceViewModel(runtime);
+        workspace.PendingOutputView = workspace.Views[0];
+        workspace.PendingSelectedView = workspace.Views[1];
+        await workspace.SelectViewCommand.ExecuteAsync();
+        workspace.NewOutputName = "Backup";
+        workspace.NewOutputNdiSourceName = "ROBOCAM - BACKUP";
+
+        await workspace.AddOutputCommand.ExecuteAsync();
+
+        Assert.Single(workspace.Outputs);
+        Assert.Equal("view-a", workspace.Outputs[0].Definition.ViewId);
+        Assert.Equal("view-b", workspace.SelectedView.Definition.Id);
+    }
+
+    [Fact]
+    public async Task FailedPreviewSwitchPreservesCurrentSelectedViewAndOutputRoutes()
+    {
+        var viewA = new ViewDefinition("view-a", "Spots A");
+        var viewB = new ViewDefinition("view-b", "Spots B");
+        var output = new OutputDefinition("output-a", "Output A", "ROBOCAM - A", viewA.Id);
+        var runtime = new FakeWorkspaceRuntimeService(
+            views: [viewA, viewB],
+            outputs: [output])
+        {
+            SwitchPreviewException = new InvalidOperationException("platform switch failed"),
+        };
+        runtime.OutputStatuses[output.Id] = FakeWorkspaceRuntimeService.CreateOutputStatus(
+            OutputRuntimeState.Running);
+        await using var workspace = new WorkspaceViewModel(runtime);
+        workspace.Preview.Attach(new PreviewHostSurface(PreviewHostPlatform.MacOSNsView, 42, 30));
+        await workspace.RefreshNowAsync();
+        workspace.PendingSelectedView = workspace.Views[1];
+
+        await workspace.SelectViewCommand.ExecuteAsync();
+
+        Assert.Equal("view-a", workspace.SelectedView.Definition.Id);
+        Assert.Equal("view-a", workspace.Preview.SelectedViewId);
+        Assert.Equal("view-a", workspace.Outputs[0].Definition.ViewId);
+        Assert.Equal(OutputRuntimeState.Running, workspace.Outputs[0].State);
+        Assert.Empty(runtime.StartOutputCallCounts);
+        Assert.Empty(runtime.StopOutputCallCounts);
+        Assert.Equal("platform switch failed", workspace.Preview.OperatorMessage);
     }
 
     [Fact]
@@ -293,7 +539,7 @@ public sealed class WorkspaceViewModelTests
         Assert.True(runtime.IsDisposed);
         Assert.Null(GetRuntimeField(workspace));
         Assert.Null(GetRuntimeField(workspace.Cameras[0]));
-        Assert.Null(GetRuntimeField(workspace.View.Slots[0]));
+        Assert.Null(GetRuntimeField(workspace.SelectedView.Slots[0]));
         Assert.Null(GetRuntimeField(workspace.Outputs[0]));
         Assert.Null(GetRuntimeField(workspace.Preview));
     }

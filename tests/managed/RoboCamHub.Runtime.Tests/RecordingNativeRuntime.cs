@@ -123,6 +123,8 @@ internal sealed class RecordingNativeRuntimeView(List<string> events, string vie
 
     public int BindingCount => IsDisposed ? 0 : _bindings.Count;
 
+    public int OutputConsumerCount { get; private set; }
+
     public NativeResult BindCameraSource(uint slotIndex, string cameraId)
     {
         _bindings[slotIndex] = cameraId;
@@ -151,6 +153,7 @@ internal sealed class RecordingNativeRuntimeView(List<string> events, string vie
             RenderFpsMilli = 60_000,
             LatestComposedFrameSequence = 100,
             LatestComposedFrameAgeMs = 5,
+            OutputConsumerCount = (uint)OutputConsumerCount,
         };
         return NativeResult.Ok;
     }
@@ -173,7 +176,11 @@ internal sealed class RecordingNativeRuntimeView(List<string> events, string vie
     public NativeResult TryCreateSender(string senderName, out INativeRuntimeSender? sender)
     {
         events.Add($"sender:create:{viewId}:{senderName}");
-        sender = new RecordingNativeRuntimeSender(events, senderName);
+        OutputConsumerCount++;
+        sender = new RecordingNativeRuntimeSender(
+            events,
+            senderName,
+            () => OutputConsumerCount--);
         return NativeResult.Ok;
     }
 
@@ -234,7 +241,10 @@ internal sealed class RecordingNativeRuntimePreview(
     }
 }
 
-internal sealed class RecordingNativeRuntimeSender(List<string> events, string senderName) : INativeRuntimeSender
+internal sealed class RecordingNativeRuntimeSender(
+    List<string> events,
+    string senderName,
+    Action onDispose) : INativeRuntimeSender
 {
     private NativeNdiSenderState _state = NativeNdiSenderState.Stopped;
     private bool _disposed;
@@ -277,5 +287,6 @@ internal sealed class RecordingNativeRuntimeSender(List<string> events, string s
 
         _disposed = true;
         events.Add($"sender:dispose:{senderName}");
+        onDispose();
     }
 }

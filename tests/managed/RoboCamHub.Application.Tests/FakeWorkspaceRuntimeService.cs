@@ -6,34 +6,62 @@ namespace RoboCamHub.Application.Tests;
 internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 {
     private readonly List<CameraDefinition> _cameras;
-    private readonly Dictionary<uint, string> _bindings = [];
+    private readonly List<ViewDefinition> _views;
+    private readonly List<OutputDefinition> _outputs;
+    private readonly Dictionary<string, Dictionary<uint, string>> _bindings = new(StringComparer.Ordinal);
 
     public FakeWorkspaceRuntimeService(
         IEnumerable<CameraDefinition>? cameras = null,
         ViewDefinition? view = null,
-        OutputDefinition? output = null)
+        OutputDefinition? output = null,
+        IEnumerable<ViewDefinition>? views = null,
+        IEnumerable<OutputDefinition>? outputs = null)
     {
         _cameras = cameras?.ToList() ?? [];
-        ViewDefinition = view ?? new ViewDefinition("view-main", "Main 2x2 View");
-        OutputDefinition = output;
-        for (var slotIndex = 0; slotIndex < ViewDefinition.SlotCount; slotIndex++)
+        _views = views?.ToList() ?? [view ?? new ViewDefinition("view-main", "Main 2x2 View")];
+        if (_views.Count == 0)
         {
-            if (ViewDefinition.GetCameraId(slotIndex) is { } cameraId)
+            throw new ArgumentException("At least one View is required.", nameof(views));
+        }
+        _outputs = outputs?.ToList() ?? (output is null ? [] : [output]);
+        SelectedViewId = _views[0].Id;
+        foreach (var definition in _views)
+        {
+            var viewBindings = new Dictionary<uint, string>();
+            for (var slotIndex = 0; slotIndex < ViewDefinition.SlotCount; slotIndex++)
             {
-                _bindings[(uint)slotIndex] = cameraId;
+                if (definition.GetCameraId(slotIndex) is { } cameraId)
+                {
+                    viewBindings[(uint)slotIndex] = cameraId;
+                }
             }
+            _bindings.Add(definition.Id, viewBindings);
         }
     }
 
     public IReadOnlyList<CameraDefinition> CameraDefinitions => _cameras;
 
-    public ViewDefinition ViewDefinition { get; }
+    public IReadOnlyList<ViewDefinition> ViewDefinitions => _views;
 
-    public OutputDefinition? OutputDefinition { get; private set; }
+    public IReadOnlyList<OutputDefinition> OutputDefinitions => _outputs;
+
+    public string SelectedViewId { get; private set; }
 
     public Dictionary<string, CameraRuntimeState> CameraStates { get; } = new(StringComparer.Ordinal);
 
-    public OutputRuntimeStatus? OutputStatus { get; set; }
+    public Dictionary<string, OutputRuntimeStatus> OutputStatuses { get; } = new(StringComparer.Ordinal);
+
+    public OutputRuntimeStatus? OutputStatus
+    {
+        get => _outputs.Count == 0 ? null : OutputStatuses.GetValueOrDefault(_outputs[0].Id);
+        set
+        {
+            if (_outputs.Count != 0 && value is { } status)
+            {
+                OutputStatuses[_outputs[0].Id] = status;
+            }
+        }
+    }
 
     public Exception? BindException { get; set; }
 
@@ -43,15 +71,25 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public Exception? AttachPreviewException { get; set; }
 
+    public Exception? SwitchPreviewException { get; set; }
+
     public Func<Task>? StartCameraHandler { get; set; }
 
     public Func<Task>? StartOutputHandler { get; set; }
+
+    public Func<string, Task>? StartOutputHandlerById { get; set; }
 
     public Func<Task>? BindHandler { get; set; }
 
     public int StartCameraCallCount { get; private set; }
 
     public int QueryCallCount { get; private set; }
+
+    public int PreviewSwitchCount { get; private set; }
+
+    public Dictionary<string, int> StartOutputCallCounts { get; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, int> StopOutputCallCounts { get; } = new(StringComparer.Ordinal);
 
     public bool IsDisposed { get; private set; }
 
@@ -87,7 +125,15 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         return Task.CompletedTask;
     }
 
+    public Task AddViewAsync(ViewDefinition definition, CancellationToken cancellationToken = default)
+    {
+        _views.Add(definition);
+        _bindings.Add(definition.Id, []);
+        return Task.CompletedTask;
+    }
+
     public async Task BindCameraSourceAsync(
+        string viewId,
         uint slotIndex,
         string cameraId,
         CancellationToken cancellationToken = default)
@@ -102,51 +148,85 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
             await BindHandler();
         }
 
-        _bindings[slotIndex] = cameraId;
+        _bindings[viewId][slotIndex] = cameraId;
     }
 
-    public Task UnbindSourceAsync(uint slotIndex, CancellationToken cancellationToken = default)
+    public Task UnbindSourceAsync(
+        string viewId,
+        uint slotIndex,
+        CancellationToken cancellationToken = default)
     {
         if (UnbindException is not null)
         {
             throw UnbindException;
         }
 
-        _bindings.Remove(slotIndex);
+        _bindings[viewId].Remove(slotIndex);
         return Task.CompletedTask;
     }
 
     public Task AddOutputAsync(OutputDefinition definition, CancellationToken cancellationToken = default)
     {
-        OutputDefinition = definition;
+        _outputs.Add(definition);
         return Task.CompletedTask;
     }
 
     public async Task StartOutputAsync(string outputId, CancellationToken cancellationToken = default)
     {
-        if (StartOutputHandler is not null)
+        StartOutputCallCounts[outputId] = StartOutputCallCounts.GetValueOrDefault(outputId) + 1;
+        if (StartOutputHandlerById is not null)
+        {
+            await StartOutputHandlerById(outputId);
+        }
+        else if (StartOutputHandler is not null)
         {
             await StartOutputHandler();
         }
 
-        OutputStatus = CreateOutputStatus(OutputRuntimeState.Running);
+        OutputStatuses[outputId] = CreateOutputStatus(OutputRuntimeState.Running);
     }
 
     public Task StopOutputAsync(string outputId, CancellationToken cancellationToken = default)
     {
-        OutputStatus = CreateOutputStatus(OutputRuntimeState.Stopped);
+        StopOutputCallCounts[outputId] = StopOutputCallCounts.GetValueOrDefault(outputId) + 1;
+        OutputStatuses[outputId] = CreateOutputStatus(OutputRuntimeState.Stopped);
         return Task.CompletedTask;
     }
 
-    public void AttachPreview(PreviewHostSurface host)
+    public async Task RestartOutputAsync(string outputId, CancellationToken cancellationToken = default)
+    {
+        await StopOutputAsync(outputId, cancellationToken);
+        await StartOutputAsync(outputId, cancellationToken);
+    }
+
+    public void AttachPreview(string viewId, PreviewHostSurface host)
     {
         if (AttachPreviewException is not null)
         {
             throw AttachPreviewException;
         }
         host.Validate();
+        SelectedViewId = viewId;
         PreviewAttached = true;
-        PreviewStatus = CreatePreviewStatus(ViewPreviewRuntimeState.Starting);
+        PreviewStatus = CreatePreviewStatus(ViewPreviewRuntimeState.Starting, viewId);
+    }
+
+    public void SwitchPreviewView(string viewId)
+    {
+        if (SwitchPreviewException is not null)
+        {
+            throw SwitchPreviewException;
+        }
+        if (!_views.Any(view => string.Equals(view.Id, viewId, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException($"View '{viewId}' is not part of this workspace.");
+        }
+        SelectedViewId = viewId;
+        PreviewSwitchCount++;
+        if (PreviewAttached)
+        {
+            PreviewStatus = CreatePreviewStatus(ViewPreviewRuntimeState.Starting, viewId);
+        }
     }
 
     public void DetachPreview()
@@ -163,46 +243,70 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
             definition => RuntimeObservation<CameraRuntimeStatus>.Success(
                 CreateCameraStatus(CameraStates.GetValueOrDefault(definition.Id, CameraRuntimeState.Stopped))),
             StringComparer.Ordinal);
-        var sourceStatuses = Enumerable.Range(0, ViewDefinition.SlotCount).ToDictionary(
-            slotIndex => (uint)slotIndex,
-            slotIndex =>
-            {
-                var hasBinding = _bindings.TryGetValue((uint)slotIndex, out var cameraId);
-                return RuntimeObservation<ViewSourceRuntimeStatus>.Success(new ViewSourceRuntimeStatus(
-                    (uint)slotIndex,
-                    hasBinding ? ViewSourceRuntimeState.Live : ViewSourceRuntimeState.Unbound,
-                    hasBinding,
-                    cameraId,
-                    hasBinding,
-                    false));
-            });
-        var outputs = OutputDefinition is null
-            ? new Dictionary<string, RuntimeObservation<OutputRuntimeStatus>>(StringComparer.Ordinal)
-            : new Dictionary<string, RuntimeObservation<OutputRuntimeStatus>>(StringComparer.Ordinal)
-            {
-                [OutputDefinition.Id] = RuntimeObservation<OutputRuntimeStatus>.Success(
-                    OutputStatus ?? CreateOutputStatus(OutputRuntimeState.Stopped)),
-            };
+        var viewStatuses = new Dictionary<string, RuntimeObservation<ViewRuntimeStatus>>(StringComparer.Ordinal);
+        var sourceStatuses = new Dictionary<string, IReadOnlyDictionary<uint, RuntimeObservation<ViewSourceRuntimeStatus>>>(StringComparer.Ordinal);
+        foreach (var view in _views)
+        {
+            var viewBindings = _bindings[view.Id];
+            viewStatuses.Add(
+                view.Id,
+                RuntimeObservation<ViewRuntimeStatus>.Success(new ViewRuntimeStatus(
+                    ViewRuntimeState.Running,
+                    (uint)viewBindings.Count,
+                    (uint)viewBindings.Count,
+                    0,
+                    0,
+                    1920,
+                    1080,
+                    60,
+                    60_000,
+                    10,
+                    5,
+                    (uint)_outputs.Count(output => string.Equals(output.ViewId, view.Id, StringComparison.Ordinal)))));
+            sourceStatuses.Add(
+                view.Id,
+                Enumerable.Range(0, ViewDefinition.SlotCount).ToDictionary(
+                    slotIndex => (uint)slotIndex,
+                    slotIndex =>
+                    {
+                        var hasBinding = viewBindings.TryGetValue((uint)slotIndex, out var cameraId);
+                        var sourceState = ViewSourceRuntimeState.Unbound;
+                        if (hasBinding)
+                        {
+                            sourceState = CameraStates.TryGetValue(cameraId!, out var cameraState)
+                                ? cameraState switch
+                                {
+                                    CameraRuntimeState.Receiving => ViewSourceRuntimeState.Live,
+                                    CameraRuntimeState.WaitingToRetry => ViewSourceRuntimeState.FrozenLastGood,
+                                    _ => ViewSourceRuntimeState.WaitingForFirstFrame,
+                                }
+                                : ViewSourceRuntimeState.Live;
+                        }
+                        return RuntimeObservation<ViewSourceRuntimeStatus>.Success(new ViewSourceRuntimeStatus(
+                            (uint)slotIndex,
+                            sourceState,
+                            hasBinding,
+                            cameraId,
+                            sourceState == ViewSourceRuntimeState.Live,
+                            false));
+                    }));
+        }
+
+        var outputs = _outputs.ToDictionary(
+            definition => definition.Id,
+            definition => RuntimeObservation<OutputRuntimeStatus>.Success(
+                OutputStatuses.GetValueOrDefault(
+                    definition.Id,
+                    CreateOutputStatus(OutputRuntimeState.Stopped))),
+            StringComparer.Ordinal);
         return Task.FromResult(new WorkspaceRuntimeSnapshot(
             cameraStatuses,
-            RuntimeObservation<ViewRuntimeStatus>.Success(new ViewRuntimeStatus(
-                ViewRuntimeState.Running,
-                (uint)_bindings.Count,
-                (uint)_bindings.Count,
-                0,
-                0,
-                1920,
-                1080,
-                60,
-                60_000,
-                10,
-                5,
-                OutputDefinition is null ? 0U : 1U)),
+            viewStatuses,
             sourceStatuses,
             outputs,
             PreviewAttached
                 ? RuntimeObservation<ViewPreviewRuntimeStatus>.Success(
-                    PreviewStatus ?? CreatePreviewStatus(ViewPreviewRuntimeState.Live))
+                    PreviewStatus ?? CreatePreviewStatus(ViewPreviewRuntimeState.Live, SelectedViewId))
                 : null));
     }
 
@@ -214,14 +318,17 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
     }
 
     public void SetLiveBinding(uint slotIndex, string? cameraId)
+        => SetLiveBinding(SelectedViewId, slotIndex, cameraId);
+
+    public void SetLiveBinding(string viewId, uint slotIndex, string? cameraId)
     {
         if (cameraId is null)
         {
-            _bindings.Remove(slotIndex);
+            _bindings[viewId].Remove(slotIndex);
         }
         else
         {
-            _bindings[slotIndex] = cameraId;
+            _bindings[viewId][slotIndex] = cameraId;
         }
     }
 
@@ -263,12 +370,14 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
             receiverCountKnown,
             receiverCount);
 
-    public static ViewPreviewRuntimeStatus CreatePreviewStatus(ViewPreviewRuntimeState state)
+    public static ViewPreviewRuntimeStatus CreatePreviewStatus(
+        ViewPreviewRuntimeState state,
+        string viewId = "view-main")
         => new(
             state,
             state == ViewPreviewRuntimeState.Failed ? "InternalError" : "Ok",
             true,
-            "view-main",
+            viewId,
             1920,
             1080,
             30,

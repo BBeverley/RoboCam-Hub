@@ -98,6 +98,11 @@ create ShowRuntime
 
 ## Current limitations
 
+> Historical Gate 5A boundary: Gate 5D supersedes the one-View/one-Output
+> application restriction with stable-ID collections while preserving this
+> document's ownership and dependency-order rules. See
+> `docs/27-gate-5d-multiple-views-outputs.md`.
+
 Gate 5A intentionally supports only the current spike surface:
 
 - fixed four-slot 2×2 View assignments;

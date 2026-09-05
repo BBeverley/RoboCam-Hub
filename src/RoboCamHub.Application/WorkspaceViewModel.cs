@@ -9,11 +9,17 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     private readonly IUiDispatcher _dispatcher;
     private readonly StatusPollingService _polling;
     private bool _isAddingCamera;
+    private bool _isAddingView;
+    private bool _isSelectingView;
     private bool _isAddingOutput;
     private string _newCameraName = string.Empty;
     private string _newCameraRtspUrl = string.Empty;
+    private string _newViewName = "Spots B";
     private string _newOutputName = "Spots A";
     private string _newOutputNdiSourceName = "ROBOCAM - SPOTS A";
+    private ViewWorkspaceViewModel _selectedView;
+    private ViewWorkspaceViewModel? _pendingSelectedView;
+    private ViewWorkspaceViewModel? _pendingOutputView;
     private string? _workspaceMessage;
     private int _disposed;
 
@@ -27,15 +33,24 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         Cameras = new ObservableCollection<CameraItemViewModel>(
             runtime.CameraDefinitions.Select(
                 definition => new CameraItemViewModel(definition, runtime, _dispatcher)));
-        View = new ViewWorkspaceViewModel(runtime.ViewDefinition, Cameras, runtime, _dispatcher);
-        Preview = new ViewPreviewViewModel(runtime);
-        Outputs = [];
-        if (runtime.OutputDefinition is { } outputDefinition)
-        {
-            Outputs.Add(new OutputItemViewModel(outputDefinition, View.Name, runtime, _dispatcher));
-        }
+        Views = new ObservableCollection<ViewWorkspaceViewModel>(
+            runtime.ViewDefinitions.Select(
+                definition => new ViewWorkspaceViewModel(definition, Cameras, runtime, _dispatcher)));
+        _selectedView = Views.FirstOrDefault(view => string.Equals(
+                view.Definition.Id,
+                runtime.SelectedViewId,
+                StringComparison.Ordinal))
+            ?? Views.FirstOrDefault()
+            ?? throw new InvalidOperationException("The workspace requires at least one View.");
+        _pendingSelectedView = _selectedView;
+        _pendingOutputView = _selectedView;
+        Preview = new ViewPreviewViewModel(runtime, _selectedView.Definition.Id);
+        Outputs = new ObservableCollection<OutputItemViewModel>(
+            runtime.OutputDefinitions.Select(definition => CreateOutputViewModel(definition, runtime)));
 
         AddCameraCommand = new AsyncCommand(AddCameraAsync, () => CanAddCamera);
+        AddViewCommand = new AsyncCommand(AddViewAsync, () => CanAddView);
+        SelectViewCommand = new AsyncCommand(SelectViewAsync, () => CanSelectView);
         AddOutputCommand = new AsyncCommand(AddOutputAsync, () => CanAddOutput);
         _polling = new StatusPollingService(
             RefreshStatusAsync,
@@ -49,11 +64,47 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
 
     public ObservableCollection<CameraItemViewModel> Cameras { get; }
 
-    public ViewWorkspaceViewModel View { get; }
+    public uint ActiveRtspSessionTotal
+        => (uint)Cameras.Sum(camera => camera.ActiveRtspSessionCount);
+
+    public uint ActiveDecoderTotal
+        => (uint)Cameras.Sum(camera => camera.ActiveDecoderCount);
+
+    public string MediaOwnershipText => $"RTSP / decoders {ActiveRtspSessionTotal} / {ActiveDecoderTotal}";
+
+    public ObservableCollection<ViewWorkspaceViewModel> Views { get; }
+
+    public ViewWorkspaceViewModel SelectedView
+    {
+        get => _selectedView;
+        private set => SetProperty(ref _selectedView, value);
+    }
+
+    public ViewWorkspaceViewModel? PendingSelectedView
+    {
+        get => _pendingSelectedView;
+        set
+        {
+            if (SetProperty(ref _pendingSelectedView, value))
+            {
+                RaiseSelectViewCommandState();
+            }
+        }
+    }
+
+    public ViewWorkspaceViewModel? PendingOutputView
+    {
+        get => _pendingOutputView;
+        set
+        {
+            if (SetProperty(ref _pendingOutputView, value))
+            {
+                RaiseAddOutputCommandState();
+            }
+        }
+    }
 
     public ViewPreviewViewModel Preview { get; }
-
-    public string OutputViewLabel => $"View: {View.Name}";
 
     public ObservableCollection<OutputItemViewModel> Outputs { get; }
 
@@ -77,6 +128,18 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
             if (SetProperty(ref _newCameraRtspUrl, value))
             {
                 RaiseAddCameraCommandState();
+            }
+        }
+    }
+
+    public string NewViewName
+    {
+        get => _newViewName;
+        set
+        {
+            if (SetProperty(ref _newViewName, value))
+            {
+                RaiseAddViewCommandState();
             }
         }
     }
@@ -117,6 +180,30 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    public bool IsAddingView
+    {
+        get => _isAddingView;
+        private set
+        {
+            if (SetProperty(ref _isAddingView, value))
+            {
+                RaiseAddViewCommandState();
+            }
+        }
+    }
+
+    public bool IsSelectingView
+    {
+        get => _isSelectingView;
+        private set
+        {
+            if (SetProperty(ref _isSelectingView, value))
+            {
+                RaiseSelectViewCommandState();
+            }
+        }
+    }
+
     public bool IsAddingOutput
     {
         get => _isAddingOutput;
@@ -134,13 +221,20 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         && !string.IsNullOrWhiteSpace(NewCameraName)
         && !string.IsNullOrWhiteSpace(NewCameraRtspUrl);
 
+    public bool CanAddView => _runtime is not null
+        && !IsAddingView
+        && !string.IsNullOrWhiteSpace(NewViewName);
+
+    public bool CanSelectView => _runtime is not null
+        && !IsSelectingView
+        && PendingSelectedView is not null
+        && !ReferenceEquals(PendingSelectedView, SelectedView);
+
     public bool CanAddOutput => _runtime is not null
-        && Outputs.Count == 0
         && !IsAddingOutput
+        && PendingOutputView is not null
         && !string.IsNullOrWhiteSpace(NewOutputName)
         && !string.IsNullOrWhiteSpace(NewOutputNdiSourceName);
-
-    public bool ShowOutputConfiguration => Outputs.Count == 0;
 
     public string? WorkspaceMessage
     {
@@ -157,6 +251,10 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     public bool HasWorkspaceMessage => !string.IsNullOrWhiteSpace(WorkspaceMessage);
 
     public AsyncCommand AddCameraCommand { get; }
+
+    public AsyncCommand AddViewCommand { get; }
+
+    public AsyncCommand SelectViewCommand { get; }
 
     public AsyncCommand AddOutputCommand { get; }
 
@@ -179,15 +277,17 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         }
 
         Preview.Dispose();
-        View.Dispose();
+        foreach (var view in Views)
+        {
+            view.Dispose();
+        }
         foreach (var camera in Cameras)
         {
             camera.Dispose();
         }
 
         var runtime = Interlocked.Exchange(ref _runtime, null);
-        RaiseAddCameraCommandState();
-        RaiseAddOutputCommandState();
+        RaiseAllCommandStates();
         if (runtime is not null)
         {
             await runtime.DisposeAsync().ConfigureAwait(false);
@@ -233,10 +333,75 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private async Task AddViewAsync()
+    {
+        var runtime = _runtime;
+        if (runtime is null || IsAddingView)
+        {
+            return;
+        }
+
+        await _dispatcher.InvokeAsync(() =>
+        {
+            IsAddingView = true;
+            WorkspaceMessage = null;
+        }).ConfigureAwait(false);
+        try
+        {
+            var definition = new ViewDefinition(
+                $"view-{Guid.NewGuid():N}",
+                NewViewName.Trim());
+            await runtime.AddViewAsync(definition).ConfigureAwait(false);
+            await _dispatcher.InvokeAsync(() =>
+            {
+                var view = new ViewWorkspaceViewModel(definition, Cameras, runtime, _dispatcher);
+                Views.Add(view);
+                PendingSelectedView = view;
+                PendingOutputView ??= view;
+                NewViewName = string.Empty;
+            }).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await _dispatcher.InvokeAsync(
+                () => WorkspaceMessage = OperatorError.ForAction("View", "creation", exception))
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            await _dispatcher.InvokeAsync(() => IsAddingView = false).ConfigureAwait(false);
+        }
+    }
+
+    private Task SelectViewAsync()
+        => _dispatcher.InvokeAsync(() =>
+        {
+            var target = PendingSelectedView;
+            if (target is null || ReferenceEquals(target, SelectedView))
+            {
+                return;
+            }
+
+            IsSelectingView = true;
+            WorkspaceMessage = null;
+            try
+            {
+                if (Preview.TrySwitchView(target.Definition.Id))
+                {
+                    SelectedView = target;
+                }
+            }
+            finally
+            {
+                IsSelectingView = false;
+            }
+        });
+
     private async Task AddOutputAsync()
     {
         var runtime = _runtime;
-        if (runtime is null || IsAddingOutput || Outputs.Count != 0)
+        var targetView = PendingOutputView;
+        if (runtime is null || targetView is null || IsAddingOutput)
         {
             return;
         }
@@ -252,13 +417,13 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
                 $"output-{Guid.NewGuid():N}",
                 NewOutputName.Trim(),
                 NewOutputNdiSourceName.Trim(),
-                View.Definition.Id);
+                targetView.Definition.Id);
             await runtime.AddOutputAsync(definition).ConfigureAwait(false);
             await _dispatcher.InvokeAsync(() =>
             {
-                Outputs.Add(new OutputItemViewModel(definition, View.Name, runtime, _dispatcher));
-                RaisePropertyChanged(nameof(ShowOutputConfiguration));
-                RaiseAddOutputCommandState();
+                Outputs.Add(new OutputItemViewModel(definition, targetView.Name, runtime, _dispatcher));
+                NewOutputName = string.Empty;
+                NewOutputNdiSourceName = "ROBOCAM - ";
             }).ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -294,8 +459,14 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
                 camera.ApplyStatus(observation);
             }
         }
+        RaisePropertyChanged(nameof(ActiveRtspSessionTotal));
+        RaisePropertyChanged(nameof(ActiveDecoderTotal));
+        RaisePropertyChanged(nameof(MediaOwnershipText));
 
-        View.ApplySnapshot(snapshot);
+        foreach (var view in Views)
+        {
+            view.ApplySnapshot(snapshot);
+        }
         Preview.ApplyStatus(snapshot.Preview);
         foreach (var output in Outputs)
         {
@@ -306,14 +477,46 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private OutputItemViewModel CreateOutputViewModel(
+        OutputDefinition definition,
+        IWorkspaceRuntimeService runtime)
+    {
+        var viewName = Views.FirstOrDefault(view => string.Equals(
+                view.Definition.Id,
+                definition.ViewId,
+                StringComparison.Ordinal))?.Name
+            ?? definition.ViewId;
+        return new OutputItemViewModel(definition, viewName, runtime, _dispatcher);
+    }
+
     private Task OnPollingErrorAsync(Exception exception)
         => _dispatcher.InvokeAsync(
             () => WorkspaceMessage = OperatorError.ForAction("Runtime status", "refresh", exception));
+
+    private void RaiseAllCommandStates()
+    {
+        RaiseAddCameraCommandState();
+        RaiseAddViewCommandState();
+        RaiseSelectViewCommandState();
+        RaiseAddOutputCommandState();
+    }
 
     private void RaiseAddCameraCommandState()
     {
         RaisePropertyChanged(nameof(CanAddCamera));
         AddCameraCommand.RaiseCanExecuteChanged();
+    }
+
+    private void RaiseAddViewCommandState()
+    {
+        RaisePropertyChanged(nameof(CanAddView));
+        AddViewCommand.RaiseCanExecuteChanged();
+    }
+
+    private void RaiseSelectViewCommandState()
+    {
+        RaisePropertyChanged(nameof(CanSelectView));
+        SelectViewCommand.RaiseCanExecuteChanged();
     }
 
     private void RaiseAddOutputCommandState()

@@ -119,15 +119,19 @@ public sealed class ShowRuntime : IDisposable
             throw new InvalidOperationException($"An Output runtime with ID '{definition.Id}' already exists.");
         }
 
-        if (_outputs.Count != 0)
-        {
-            throw new InvalidOperationException("Gate 5A supports one managed Output runtime.");
-        }
-
         if (!_views.TryGetValue(definition.ViewId, out var view))
         {
             throw new RuntimeReferenceException(
                 $"Output '{definition.Id}' references missing View '{definition.ViewId}'.");
+        }
+
+        if (_outputs.Values.Any(output => string.Equals(
+                output.Definition.NdiSourceName,
+                definition.NdiSourceName,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                $"An Output using NDI source name '{definition.NdiSourceName}' already exists.");
         }
 
         var createResult = view.NativeView.TryCreateSender(definition.NdiSourceName, out var nativeSender);

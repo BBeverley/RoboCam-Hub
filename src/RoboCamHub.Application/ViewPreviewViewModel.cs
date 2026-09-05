@@ -5,6 +5,7 @@ namespace RoboCamHub.Application;
 public sealed class ViewPreviewViewModel : ObservableObject, IDisposable
 {
     private IWorkspaceRuntimeService? _runtime;
+    private string _selectedViewId;
     private ViewPreviewRuntimeState _state = ViewPreviewRuntimeState.Starting;
     private bool _attached;
     private uint _presentationFpsMilli;
@@ -14,9 +15,16 @@ public sealed class ViewPreviewViewModel : ObservableObject, IDisposable
     private uint _surfaceRecreateCount;
     private string? _operatorMessage;
 
-    internal ViewPreviewViewModel(IWorkspaceRuntimeService runtime)
+    internal ViewPreviewViewModel(IWorkspaceRuntimeService runtime, string selectedViewId)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _selectedViewId = selectedViewId;
+    }
+
+    public string SelectedViewId
+    {
+        get => _selectedViewId;
+        private set => SetProperty(ref _selectedViewId, value);
     }
 
     public ViewPreviewRuntimeState State
@@ -134,7 +142,7 @@ public sealed class ViewPreviewViewModel : ObservableObject, IDisposable
         OperatorMessage = null;
         try
         {
-            runtime.AttachPreview(host);
+            runtime.AttachPreview(SelectedViewId, host);
             Attached = true;
         }
         catch (Exception exception)
@@ -142,6 +150,30 @@ public sealed class ViewPreviewViewModel : ObservableObject, IDisposable
             Attached = false;
             State = ViewPreviewRuntimeState.Failed;
             OperatorMessage = OperatorError.ForAction("Preview", "attach", exception);
+        }
+    }
+
+    internal bool TrySwitchView(string viewId)
+    {
+        var runtime = _runtime;
+        if (runtime is null || string.Equals(SelectedViewId, viewId, StringComparison.Ordinal))
+        {
+            return runtime is not null;
+        }
+
+        State = ViewPreviewRuntimeState.Starting;
+        OperatorMessage = null;
+        try
+        {
+            runtime.SwitchPreviewView(viewId);
+            SelectedViewId = viewId;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            State = ViewPreviewRuntimeState.Failed;
+            OperatorMessage = OperatorError.ForAction("Preview", "switch", exception);
+            return false;
         }
     }
 

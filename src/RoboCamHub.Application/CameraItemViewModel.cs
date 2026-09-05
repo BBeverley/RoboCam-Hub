@@ -8,6 +8,8 @@ public sealed class CameraItemViewModel : ObservableObject, IDisposable
     private IWorkspaceRuntimeService? _runtime;
     private readonly IUiDispatcher _dispatcher;
     private CameraRuntimeState _state = CameraRuntimeState.Stopped;
+    private uint _activeRtspSessionCount;
+    private uint _activeDecoderCount;
     private bool _isBusy;
     private string? _operatorMessage;
 
@@ -72,6 +74,18 @@ public sealed class CameraItemViewModel : ObservableObject, IDisposable
         _ => "#8E99A8",
     };
 
+    public uint ActiveRtspSessionCount
+    {
+        get => _activeRtspSessionCount;
+        private set => SetProperty(ref _activeRtspSessionCount, value);
+    }
+
+    public uint ActiveDecoderCount
+    {
+        get => _activeDecoderCount;
+        private set => SetProperty(ref _activeDecoderCount, value);
+    }
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -120,6 +134,8 @@ public sealed class CameraItemViewModel : ObservableObject, IDisposable
         }
 
         State = observation.Value!.Value.State;
+        ActiveRtspSessionCount = observation.Value.Value.ActiveRtspSessionCount;
+        ActiveDecoderCount = observation.Value.Value.ActiveDecoderCount;
         OperatorMessage = null;
     }
 

@@ -133,6 +133,36 @@ It does not share a blocking lock with the compositor or NDI worker. Managed
 code receives only low-frequency state and counters; full-frame pixels and
 leases remain in C++. See ADR 0002 and `docs/26-gate-5c-native-view-preview.md`.
 
+## Gate 5D multi-View fan-out status
+
+Gate 5D promotes the application/runtime layer from one fixed View to keyed
+collections of Views and Outputs. Each `ViewDefinition` has a stable ID and owns
+exactly one native View/compositor. A slot continues to reference a logical
+camera ID, so assigning the same camera to two Views reads the camera's one
+shared native latest-frame source; it does not create another RTSP session or
+decoder.
+
+The same composed View may feed the selected local preview and any number of
+independent NDI sender handles:
+
+```text
+one logical camera → one RTSP session → one decoder → shared latest frame
+                                             ├─ View A compositor latest frame
+                                             │    ├─ selected local preview
+                                             │    ├─ NDI Output A
+                                             │    └─ NDI Output A backup
+                                             └─ View B compositor latest frame
+                                                  └─ NDI Output B
+```
+
+Every consumer remains newest-frame and bounded. Preview selection changes only
+which existing View has the single local preview attachment; it does not mutate
+an Output's stable `ViewId`, rebuild an Output or touch camera ingest. Native
+View diagnostics expose the output-consumer count so fan-out can be checked
+without inferring it from UI state. See
+`docs/27-gate-5d-multiple-views-outputs.md` for the application model, teardown
+rules and measured proof.
+
 ## Multiple Views
 
 Users may create any practical number of Views. Examples:

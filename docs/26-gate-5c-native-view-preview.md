@@ -159,6 +159,20 @@ Local artifacts from this validation were written to `/tmp`:
 - `rch-g5c-view-ndi-release-hwsource.log` and
   `rch-g5c-view-ndi-receiver-release.log`.
 
+## Gate 5D preview-selection extension
+
+Gate 5D retains the same single native preview presenter and makes its source
+View selectable. Switching disposes the previous View's preview attachment and
+attaches the existing host surface to the target View; it does not create a
+second compositor or alter any Output's stable `ViewId`. If target attachment
+fails, the service attempts to restore the previous View and does not commit the
+new selected View ID. Active NDI senders and camera ingest remain untouched.
+
+The local Gate 5D proof switched between two live Views while two official NDI
+senders continued. NDI Video Monitor continued to show the correctly routed View
+B while the Avalonia preview displayed View A. See
+`docs/27-gate-5d-multiple-views-outputs.md`.
+
 ## Current limitations
 
 - `NativeControlHost` has an airspace boundary; Avalonia controls cannot overlay

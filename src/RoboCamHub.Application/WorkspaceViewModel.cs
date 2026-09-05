@@ -28,6 +28,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
             runtime.CameraDefinitions.Select(
                 definition => new CameraItemViewModel(definition, runtime, _dispatcher)));
         View = new ViewWorkspaceViewModel(runtime.ViewDefinition, Cameras, runtime, _dispatcher);
+        Preview = new ViewPreviewViewModel(runtime);
         Outputs = [];
         if (runtime.OutputDefinition is { } outputDefinition)
         {
@@ -49,6 +50,8 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<CameraItemViewModel> Cameras { get; }
 
     public ViewWorkspaceViewModel View { get; }
+
+    public ViewPreviewViewModel Preview { get; }
 
     public string OutputViewLabel => $"View: {View.Name}";
 
@@ -175,6 +178,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
             output.Dispose();
         }
 
+        Preview.Dispose();
         View.Dispose();
         foreach (var camera in Cameras)
         {
@@ -292,6 +296,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         }
 
         View.ApplySnapshot(snapshot);
+        Preview.ApplyStatus(snapshot.Preview);
         foreach (var output in Outputs)
         {
             if (snapshot.Outputs.TryGetValue(output.Definition.Id, out var observation))

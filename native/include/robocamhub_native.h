@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #define RCH_ABI_VERSION_MAJOR UINT32_C(1)
-#define RCH_ABI_VERSION_MINOR UINT32_C(7)
+#define RCH_ABI_VERSION_MINOR UINT32_C(8)
 #define RCH_ABI_VERSION ((RCH_ABI_VERSION_MAJOR << 16U) | RCH_ABI_VERSION_MINOR)
 
 #define RCH_CAMERA_CONFIG_VERSION UINT32_C(1)
@@ -47,6 +47,10 @@ extern "C" {
 #define RCH_NDI_SENDER_STATUS_VERSION_V1 UINT32_C(1)
 #define RCH_NDI_SENDER_STATUS_VERSION_V2 UINT32_C(2)
 #define RCH_NDI_SENDER_STATUS_VERSION RCH_NDI_SENDER_STATUS_VERSION_V2
+#define RCH_VIEW_PREVIEW_CONFIG_VERSION_V1 UINT32_C(1)
+#define RCH_VIEW_PREVIEW_CONFIG_VERSION RCH_VIEW_PREVIEW_CONFIG_VERSION_V1
+#define RCH_VIEW_PREVIEW_STATUS_VERSION_V1 UINT32_C(1)
+#define RCH_VIEW_PREVIEW_STATUS_VERSION RCH_VIEW_PREVIEW_STATUS_VERSION_V1
 #define RCH_VIEW_MAX_SOURCE_SLOTS UINT32_C(16)
 #define RCH_NO_FRAME_AGE_MS UINT64_MAX
 
@@ -287,6 +291,54 @@ typedef struct rch_ndi_sender_status_v1 {
   uint32_t reserved_v2;
 } rch_ndi_sender_status_v1;
 
+typedef uint32_t rch_view_preview_platform;
+enum rch_view_preview_platform_code {
+  RCH_VIEW_PREVIEW_PLATFORM_WINDOWS_HWND = 1,
+  RCH_VIEW_PREVIEW_PLATFORM_MACOS_NSVIEW = 2
+};
+
+typedef uint32_t rch_view_preview_state;
+enum rch_view_preview_state_code {
+  RCH_VIEW_PREVIEW_STATE_STARTING = 0,
+  RCH_VIEW_PREVIEW_STATE_LIVE = 1,
+  RCH_VIEW_PREVIEW_STATE_WAITING_FOR_VIEW = 2,
+  RCH_VIEW_PREVIEW_STATE_FAILED = 3
+};
+
+/* Creates a native-only presentation attachment inside an Avalonia-provided
+ * platform host. host_native_handle is an HWND on Windows or NSView pointer on
+ * macOS encoded as a fixed-width integer; it is borrowed only for creation and
+ * remains owned by Avalonia. No frame payload crosses this structure. */
+typedef struct rch_view_preview_config_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  uint64_t host_native_handle;
+  rch_view_preview_platform platform;
+  uint32_t target_fps;
+  uint32_t reserved[4];
+} rch_view_preview_config_v1;
+
+/* Low-frequency diagnostics for one native preview presentation attachment.
+ * Callers set struct_size/version. Version 1 writes no bytes beyond its size. */
+typedef struct rch_view_preview_status_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  rch_view_preview_state state;
+  rch_result last_result;
+  uint32_t attached;
+  uint32_t configured_width;
+  uint32_t configured_height;
+  uint32_t target_fps;
+  uint32_t presentation_fps_milli;
+  uint32_t surface_recreate_count;
+  uint32_t reserved;
+  uint64_t presented_frame_count;
+  uint64_t latest_presented_sequence;
+  uint64_t latest_presented_frame_age_ms;
+  uint64_t dropped_or_skipped_frame_count;
+  char view_id_utf8[256];
+} rch_view_preview_status_v1;
+
 /* Opaque, native-owned handle. Create it with rch_engine_create and release it
  * exactly once with rch_engine_destroy. */
 typedef struct rch_engine* rch_engine_handle;
@@ -295,6 +347,7 @@ typedef struct rch_frame_lease* rch_frame_lease_handle;
 typedef struct rch_view* rch_view_handle;
 typedef struct rch_view_frame_lease* rch_view_frame_lease_handle;
 typedef struct rch_ndi_sender* rch_ndi_sender_handle;
+typedef struct rch_view_preview* rch_view_preview_handle;
 
 RCH_API uint32_t rch_get_abi_version(void) RCH_NOEXCEPT;
 
@@ -469,6 +522,22 @@ RCH_API rch_result rch_view_frame_lease_sample_rgba(
 /* Releases a composed-frame lease handle. */
 RCH_API rch_result rch_view_frame_lease_destroy(
   rch_view_frame_lease_handle lease) RCH_NOEXCEPT;
+
+/* Attaches a bounded native presentation consumer to the existing composed
+ * View frame. It does not create camera, decoder, View or NDI ownership. */
+RCH_API rch_result rch_view_preview_create(
+  rch_view_handle view,
+  const rch_view_preview_config_v1* config,
+  rch_view_preview_handle* out_preview) RCH_NOEXCEPT;
+
+/* Removes the native presentation surface and releases its View reference. */
+RCH_API rch_result rch_view_preview_destroy(
+  rch_view_preview_handle preview) RCH_NOEXCEPT;
+
+/* Returns a low-frequency local preview status snapshot. */
+RCH_API rch_result rch_view_preview_get_status(
+  rch_view_preview_handle preview,
+  rch_view_preview_status_v1* out_status) RCH_NOEXCEPT;
 
 /* Creates a bounded native sender attached to an existing View's latest composed
  * frame. The sender never creates another RTSP or decode pipeline; it is a

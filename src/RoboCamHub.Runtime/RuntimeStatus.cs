@@ -35,6 +35,14 @@ public enum OutputRuntimeState
     Failed,
 }
 
+public enum ViewPreviewRuntimeState
+{
+    Starting,
+    Live,
+    WaitingForView,
+    Failed,
+}
+
 public readonly record struct CameraRuntimeStatus(
     CameraRuntimeState State,
     string LastResult,
@@ -89,6 +97,21 @@ public readonly record struct OutputRuntimeStatus(
     uint P95SendDurationUs,
     bool ReceiverCountKnown,
     uint ReceiverCount);
+
+public readonly record struct ViewPreviewRuntimeStatus(
+    ViewPreviewRuntimeState State,
+    string LastResult,
+    bool Attached,
+    string ViewId,
+    uint ConfiguredWidth,
+    uint ConfiguredHeight,
+    uint TargetFps,
+    uint PresentationFpsMilli,
+    ulong PresentedFrameCount,
+    ulong LatestPresentedSequence,
+    ulong LatestPresentedFrameAgeMs,
+    ulong DroppedOrSkippedFrameCount,
+    uint SurfaceRecreateCount);
 
 public readonly record struct ShowRuntimeDiagnostics(
     uint ConfiguredCameraCount,

@@ -147,9 +147,10 @@ GStreamer decode
 → compositor / NDI
 ```
 
-The Avalonia preview must eventually use a native-backed rendering/surface interop mechanism selected in a separate ADR/technical spike.
-
-Possible future implementations may involve platform GPU texture/surface handles or another zero/low-copy bridge, but that decision is deliberately deferred until benchmarked.
+Gate 5C implements the Avalonia preview through the native-backed platform host
+mechanism selected in ADR 0002. Full frames remain native-owned; managed code
+carries only a typed host identity and low-frequency status. A future GPU
+compositor may replace the platform presenter behind that ownership boundary.
 
 ## Threading
 
@@ -215,7 +216,7 @@ The managed resolver may map the logical import name to packaged platform files.
 
 - requires explicit marshaling definitions;
 - lifetime/ownership must be carefully documented;
-- preview GPU-surface interop still requires a separate design;
+- platform preview adapters require explicit UI-thread-affine lifecycle code;
 - ABI evolution requires discipline.
 
 These costs are preferable to exposing C++ classes directly or allowing the managed UI layer to become part of the real-time media path.
@@ -242,7 +243,6 @@ Deferred. Stronger process isolation could be introduced later if crash/fault ev
 
 Expected later decisions include:
 
-- frame/GPU sharing strategy for Avalonia preview;
 - compositor GPU backend;
 - native event/status transport details if callbacks prove insufficient;
 - optional worker-process isolation if real-world stability warrants it.

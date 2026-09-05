@@ -16,4 +16,5 @@ public sealed record WorkspaceRuntimeSnapshot(
     IReadOnlyDictionary<string, RuntimeObservation<CameraRuntimeStatus>> Cameras,
     RuntimeObservation<ViewRuntimeStatus> View,
     IReadOnlyDictionary<uint, RuntimeObservation<ViewSourceRuntimeStatus>> ViewSources,
-    IReadOnlyDictionary<string, RuntimeObservation<OutputRuntimeStatus>> Outputs);
+    IReadOnlyDictionary<string, RuntimeObservation<OutputRuntimeStatus>> Outputs,
+    RuntimeObservation<ViewPreviewRuntimeStatus>? Preview);

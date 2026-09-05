@@ -3,6 +3,7 @@
 #include "frames/latest_frame.h"
 #include "ingest/single_camera_ingest.h"
 #include "ndi/ndi_sender_backend.h"
+#include "preview/native_preview_surface.h"
 
 #include <gst/gst.h>
 
@@ -13,6 +14,7 @@
 #include <cstddef>
 #include <cstring>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -191,6 +193,7 @@ struct ViewState final {
   std::atomic<bool> stop_requested{false};
   std::atomic<bool> render_running{false};
   std::atomic<std::uint32_t> output_consumer_count{0};
+  std::atomic<std::uint32_t> preview_consumer_count{0};
   std::mutex stats_mutex;
   ViewRenderStats stats{};
   std::deque<std::uint32_t> recent_render_durations_us;
@@ -270,6 +273,25 @@ struct rch_ndi_sender final {
 #if defined(RCH_NDI_SENDER_TESTING)
   std::atomic<std::uint32_t> test_backend_delay_ms{0};
 #endif
+};
+
+struct rch_view_preview final {
+  std::shared_ptr<ViewState> view;
+  std::string view_id;
+  std::unique_ptr<robocamhub::preview::NativePreviewSurface> surface;
+  std::mutex stats_mutex;
+  std::deque<std::chrono::steady_clock::time_point> presented_times;
+  std::atomic<bool> destroyed{false};
+  std::atomic<std::uint32_t> state{RCH_VIEW_PREVIEW_STATE_STARTING};
+  std::atomic<std::uint32_t> last_result{RCH_RESULT_OK};
+  std::atomic<std::uint32_t> attached{0};
+  std::atomic<std::uint32_t> presentation_fps_milli{0};
+  std::atomic<std::uint32_t> surface_recreate_count{0};
+  std::atomic<std::uint64_t> presented_frame_count{0};
+  std::atomic<std::uint64_t> latest_presented_sequence{0};
+  std::atomic<std::uint64_t> latest_presented_frame_age_ms{RCH_NO_FRAME_AGE_MS};
+  std::atomic<std::uint64_t> dropped_or_skipped_frame_count{0};
+  std::uint32_t target_fps{30};
 };
 
 namespace {
@@ -461,6 +483,140 @@ void NdiSenderWorker(const std::shared_ptr<ViewState>& state, rch_ndi_sender* se
 
   sender->running.store(false, std::memory_order_release);
   sender->state.store(RCH_NDI_SENDER_STATE_STOPPED, std::memory_order_release);
+}
+
+robocamhub::frames::LatestFrameLease AcquirePreviewLatest(void* context) noexcept
+{
+  auto* preview = static_cast<rch_view_preview*>(context);
+  if (preview == nullptr || preview->destroyed.load(std::memory_order_acquire)) {
+    return {};
+  }
+  const auto& view = preview->view;
+  if (view == nullptr
+      || !IsRegistryActive(view->registry)
+      || view->removed.load(std::memory_order_acquire)
+      || view->stop_requested.load(std::memory_order_acquire)) {
+    preview->state.store(RCH_VIEW_PREVIEW_STATE_FAILED, std::memory_order_release);
+    preview->last_result.store(RCH_RESULT_INVALID_HANDLE, std::memory_order_release);
+    preview->latest_presented_frame_age_ms.store(RCH_NO_FRAME_AGE_MS, std::memory_order_release);
+    return {};
+  }
+  return view->latest_composed_frame.AcquireLease();
+}
+
+void ReportPreviewWaiting(void* context) noexcept
+{
+  auto* preview = static_cast<rch_view_preview*>(context);
+  if (preview == nullptr || preview->destroyed.load(std::memory_order_acquire)) {
+    return;
+  }
+  if (preview->state.load(std::memory_order_acquire) != RCH_VIEW_PREVIEW_STATE_FAILED) {
+    preview->state.store(RCH_VIEW_PREVIEW_STATE_WAITING_FOR_VIEW, std::memory_order_release);
+    preview->last_result.store(RCH_RESULT_OK, std::memory_order_release);
+  }
+  preview->latest_presented_frame_age_ms.store(RCH_NO_FRAME_AGE_MS, std::memory_order_release);
+}
+
+void UpdatePreviewPresentationRate(
+  rch_view_preview& preview,
+  std::chrono::steady_clock::time_point now) noexcept
+{
+  try {
+    std::lock_guard lock(preview.stats_mutex);
+    preview.presented_times.push_back(now);
+    constexpr auto window = std::chrono::seconds(2);
+    const auto floor = now - window;
+    while (!preview.presented_times.empty() && preview.presented_times.front() < floor) {
+      preview.presented_times.pop_front();
+    }
+    if (preview.presented_times.size() < 2U) {
+      preview.presentation_fps_milli.store(0U, std::memory_order_release);
+      return;
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      preview.presented_times.back() - preview.presented_times.front()).count();
+    if (elapsed < 250) {
+      preview.presentation_fps_milli.store(0U, std::memory_order_release);
+      return;
+    }
+    const auto intervals = static_cast<std::uint64_t>(preview.presented_times.size() - 1U);
+    preview.presentation_fps_milli.store(
+      static_cast<std::uint32_t>((intervals * UINT64_C(1000000))
+                                 / static_cast<std::uint64_t>(elapsed)),
+      std::memory_order_release);
+  } catch (...) {
+    preview.presentation_fps_milli.store(0U, std::memory_order_release);
+  }
+}
+
+void ReportPreviewPresented(
+  void* context,
+  std::uint64_t sequence,
+  std::uint64_t frame_age_ms) noexcept
+{
+  auto* preview = static_cast<rch_view_preview*>(context);
+  if (preview == nullptr || preview->destroyed.load(std::memory_order_acquire)) {
+    return;
+  }
+
+  const auto previous = preview->latest_presented_sequence.load(std::memory_order_acquire);
+  preview->state.store(RCH_VIEW_PREVIEW_STATE_LIVE, std::memory_order_release);
+  preview->last_result.store(RCH_RESULT_OK, std::memory_order_release);
+  preview->latest_presented_frame_age_ms.store(frame_age_ms, std::memory_order_release);
+  if (sequence == 0U || sequence == previous) {
+    return;
+  }
+  if (previous > 0U && sequence > previous + 1U) {
+    preview->dropped_or_skipped_frame_count.fetch_add(
+      sequence - previous - 1U,
+      std::memory_order_acq_rel);
+  }
+  preview->latest_presented_sequence.store(sequence, std::memory_order_release);
+  preview->presented_frame_count.fetch_add(1U, std::memory_order_acq_rel);
+  UpdatePreviewPresentationRate(*preview, std::chrono::steady_clock::now());
+}
+
+void ReportPreviewSurfaceRecreated(void* context) noexcept
+{
+  auto* preview = static_cast<rch_view_preview*>(context);
+  if (preview != nullptr && !preview->destroyed.load(std::memory_order_acquire)) {
+    preview->surface_recreate_count.fetch_add(1U, std::memory_order_acq_rel);
+  }
+}
+
+void ReportPreviewError(void* context, rch_result result) noexcept
+{
+  auto* preview = static_cast<rch_view_preview*>(context);
+  if (preview == nullptr || preview->destroyed.load(std::memory_order_acquire)) {
+    return;
+  }
+  preview->state.store(RCH_VIEW_PREVIEW_STATE_FAILED, std::memory_order_release);
+  preview->last_result.store(result, std::memory_order_release);
+  preview->latest_presented_frame_age_ms.store(RCH_NO_FRAME_AGE_MS, std::memory_order_release);
+}
+
+robocamhub::preview::PreviewFrameSource MakePreviewFrameSource(rch_view_preview* preview) noexcept
+{
+  return {
+    preview,
+    AcquirePreviewLatest,
+    ReportPreviewWaiting,
+    ReportPreviewPresented,
+    ReportPreviewSurfaceRecreated,
+    ReportPreviewError,
+  };
+}
+
+bool IsPreviewPlatformSupported(rch_view_preview_platform platform) noexcept
+{
+#if defined(RCH_PLATFORM_WINDOWS)
+  return platform == RCH_VIEW_PREVIEW_PLATFORM_WINDOWS_HWND;
+#elif defined(RCH_PLATFORM_MACOS)
+  return platform == RCH_VIEW_PREVIEW_PLATFORM_MACOS_NSVIEW;
+#else
+  static_cast<void>(platform);
+  return false;
+#endif
 }
 
 }  // namespace
@@ -2427,6 +2583,130 @@ extern "C" rch_result rch_view_frame_lease_destroy(
     lease->lease = robocamhub::frames::LatestFrameLease{};
     lease->owner.reset();
     delete lease;
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_view_preview_create(
+  rch_view_handle view,
+  const rch_view_preview_config_v1* config,
+  rch_view_preview_handle* out_preview) noexcept
+{
+  if (view == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (config == nullptr || out_preview == nullptr) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+  *out_preview = nullptr;
+  if (config->struct_version != RCH_VIEW_PREVIEW_CONFIG_VERSION_V1
+      || config->struct_size < sizeof(rch_view_preview_config_v1)
+      || config->host_native_handle == 0U
+      || config->target_fps == 0U
+      || config->target_fps > kViewTargetFps
+      || !IsPreviewPlatformSupported(config->platform)
+      || std::any_of(
+        std::begin(config->reserved),
+        std::end(config->reserved),
+        [](std::uint32_t value) { return value != 0U; })) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+  if (view->destroyed.load(std::memory_order_acquire) || view->state == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (!IsRegistryActive(view->state->registry)
+      || view->state->removed.load(std::memory_order_acquire)) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+
+  try {
+    auto preview = std::unique_ptr<rch_view_preview>(new rch_view_preview());
+    preview->view = view->state;
+    preview->view_id = view->state->view_id;
+    preview->target_fps = config->target_fps;
+    preview->surface = robocamhub::preview::CreateNativePreviewSurface(
+      config->platform,
+      config->host_native_handle,
+      config->target_fps,
+      MakePreviewFrameSource(preview.get()));
+    if (preview->surface == nullptr) {
+      return RCH_RESULT_INTERNAL_ERROR;
+    }
+    preview->attached.store(1U, std::memory_order_release);
+    view->state->preview_consumer_count.fetch_add(1U, std::memory_order_acq_rel);
+    *out_preview = preview.release();
+    return RCH_RESULT_OK;
+  } catch (const std::bad_alloc&) {
+    return RCH_RESULT_OUT_OF_MEMORY;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_view_preview_destroy(
+  rch_view_preview_handle preview) noexcept
+{
+  if (preview == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  try {
+    if (preview->destroyed.exchange(true, std::memory_order_acq_rel)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+    preview->attached.store(0U, std::memory_order_release);
+    preview->surface.reset();
+    if (preview->view != nullptr) {
+      DecrementIfPositive(preview->view->preview_consumer_count);
+    }
+    preview->view.reset();
+    delete preview;
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_view_preview_get_status(
+  rch_view_preview_handle preview,
+  rch_view_preview_status_v1* out_status) noexcept
+{
+  if (preview == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_status == nullptr
+      || out_status->struct_version != RCH_VIEW_PREVIEW_STATUS_VERSION_V1
+      || out_status->struct_size < sizeof(rch_view_preview_status_v1)) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+  try {
+    if (preview->destroyed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+
+    rch_view_preview_status_v1 status{};
+    status.struct_size = static_cast<std::uint32_t>(sizeof(status));
+    status.struct_version = RCH_VIEW_PREVIEW_STATUS_VERSION_V1;
+    status.state = preview->state.load(std::memory_order_acquire);
+    status.last_result = static_cast<rch_result>(preview->last_result.load(std::memory_order_acquire));
+    status.attached = preview->attached.load(std::memory_order_acquire);
+    status.configured_width = kViewComposedWidth;
+    status.configured_height = kViewComposedHeight;
+    status.target_fps = preview->target_fps;
+    status.presentation_fps_milli = preview->presentation_fps_milli.load(std::memory_order_acquire);
+    status.surface_recreate_count = preview->surface_recreate_count.load(std::memory_order_acquire);
+    status.reserved = 0U;
+    status.presented_frame_count = preview->presented_frame_count.load(std::memory_order_acquire);
+    status.latest_presented_sequence = preview->latest_presented_sequence.load(std::memory_order_acquire);
+    status.latest_presented_frame_age_ms = preview->latest_presented_frame_age_ms.load(
+      std::memory_order_acquire);
+    status.dropped_or_skipped_frame_count = preview->dropped_or_skipped_frame_count.load(
+      std::memory_order_acquire);
+    const auto copy_length = std::min(preview->view_id.size(), sizeof(status.view_id_utf8) - 1U);
+    std::memcpy(status.view_id_utf8, preview->view_id.data(), copy_length);
+    status.view_id_utf8[copy_length] = '\0';
+    std::memcpy(out_status, &status, sizeof(status));
     return RCH_RESULT_OK;
   } catch (...) {
     return RCH_RESULT_INTERNAL_ERROR;

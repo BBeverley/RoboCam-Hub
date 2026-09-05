@@ -35,6 +35,8 @@ internal interface INativeRuntimeView : IDisposable
     NativeResult TryGetSourceStatus(uint slotIndex, out NativeViewSourceStatus status);
 
     NativeResult TryCreateSender(string senderName, out INativeRuntimeSender? sender);
+
+    NativeResult TryCreatePreview(PreviewHostSurface host, out INativeRuntimePreview? preview);
 }
 
 internal interface INativeRuntimeSender : IDisposable
@@ -44,6 +46,11 @@ internal interface INativeRuntimeSender : IDisposable
     NativeResult Stop();
 
     NativeResult TryGetStatus(out NativeNdiSenderStatus status);
+}
+
+internal interface INativeRuntimePreview : IDisposable
+{
+    NativeResult TryGetStatus(out NativeViewPreviewStatus status);
 }
 
 internal sealed class NativeRuntimeFactory : INativeRuntimeFactory
@@ -107,7 +114,34 @@ internal sealed class NativeRuntimeView(NativeView view) : INativeRuntimeView
         return result;
     }
 
+    public NativeResult TryCreatePreview(PreviewHostSurface host, out INativeRuntimePreview? preview)
+    {
+        var platform = host.Platform switch
+        {
+            PreviewHostPlatform.WindowsHwnd => NativeViewPreviewPlatform.WindowsHwnd,
+            PreviewHostPlatform.MacOSNsView => NativeViewPreviewPlatform.MacOSNsView,
+            _ => throw new ArgumentOutOfRangeException(nameof(host)),
+        };
+        var result = view.TryCreatePreview(
+            platform,
+            host.NativeHandle,
+            host.TargetFps,
+            out var nativePreview);
+        preview = result == NativeResult.Ok && nativePreview is not null
+            ? new NativeRuntimePreview(nativePreview)
+            : null;
+        return result;
+    }
+
     public void Dispose() => view.Dispose();
+}
+
+internal sealed class NativeRuntimePreview(NativeViewPreview preview) : INativeRuntimePreview
+{
+    public NativeResult TryGetStatus(out NativeViewPreviewStatus status)
+        => preview.TryGetStatus(out status);
+
+    public void Dispose() => preview.Dispose();
 }
 
 internal sealed class NativeRuntimeSender(NativeNdiSender sender) : INativeRuntimeSender

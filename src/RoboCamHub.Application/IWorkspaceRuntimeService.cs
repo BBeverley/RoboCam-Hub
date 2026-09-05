@@ -1,4 +1,5 @@
 using RoboCamHub.Domain;
+using RoboCamHub.Runtime;
 
 namespace RoboCamHub.Application;
 
@@ -25,6 +26,10 @@ public interface IWorkspaceRuntimeService : IAsyncDisposable
     Task StartOutputAsync(string outputId, CancellationToken cancellationToken = default);
 
     Task StopOutputAsync(string outputId, CancellationToken cancellationToken = default);
+
+    void AttachPreview(PreviewHostSurface host);
+
+    void DetachPreview();
 
     Task<WorkspaceRuntimeSnapshot> QueryStatusAsync(CancellationToken cancellationToken = default);
 }

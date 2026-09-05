@@ -112,6 +112,27 @@ Implementation note:
    isolated so a future GPU compositor can replace it without changing ingest
    ownership semantics.
 
+## Gate 5C local preview status
+
+Gate 5C presents the existing composed View in the Avalonia workspace. It does
+not create another camera pipeline, decoder, View or compositor. The platform
+adapter acquires one reference-counted lease to the current composed frame only
+when the native presentation surface paints:
+
+```text
+View compositor latest RGBA frame
+  ├─ NDI sender worker
+  └─ local native presenter
+       ├─ child HWND / GDI on Windows
+       └─ child NSView / Core Graphics on macOS
+```
+
+The local presenter has no frame queue. If local display work falls behind, the
+next paint acquires the newest frame and sequence gaps are counted as skipped.
+It does not share a blocking lock with the compositor or NDI worker. Managed
+code receives only low-frequency state and counters; full-frame pixels and
+leases remain in C++. See ADR 0002 and `docs/26-gate-5c-native-view-preview.md`.
+
 ## Multiple Views
 
 Users may create any practical number of Views. Examples:

@@ -95,6 +95,22 @@ public sealed class WorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task StatusPollingPreservesPendingSlotSelectionUntilAssignment()
+    {
+        var camera = Camera("camera-1", "Spot 1");
+        var runtime = new FakeWorkspaceRuntimeService([camera]);
+        await using var workspace = new WorkspaceViewModel(runtime);
+        var slot = workspace.View.Slots[0];
+        slot.SelectedCamera = workspace.Cameras[0];
+
+        await workspace.RefreshNowAsync();
+
+        Assert.Same(workspace.Cameras[0], slot.SelectedCamera);
+        Assert.True(slot.AssignCommand.CanExecute(null));
+        Assert.Null(slot.AssignedCameraId);
+    }
+
+    [Fact]
     public async Task FailedSlotAssignmentKeepsPreviousOperatorAssignment()
     {
         var cameras = new[] { Camera("camera-1", "Spot 1"), Camera("camera-2", "Spot 2") };
@@ -221,6 +237,49 @@ public sealed class WorkspaceViewModelTests
         Assert.DoesNotContain("internal implementation detail", workspace.Cameras[0].OperatorMessage);
     }
 
+    [Theory]
+    [InlineData(ViewPreviewRuntimeState.Starting, "Preview Starting", "◐")]
+    [InlineData(ViewPreviewRuntimeState.Live, "Preview Live", "●")]
+    [InlineData(ViewPreviewRuntimeState.WaitingForView, "Preview Waiting for View", "◐")]
+    [InlineData(ViewPreviewRuntimeState.Failed, "Preview Failed", "✕")]
+    public async Task PreviewRuntimeStateMapsToInlineOperatorState(
+        ViewPreviewRuntimeState state,
+        string expectedText,
+        string expectedIcon)
+    {
+        var runtime = new FakeWorkspaceRuntimeService();
+        await using var workspace = new WorkspaceViewModel(runtime);
+        workspace.Preview.Attach(new PreviewHostSurface(PreviewHostPlatform.MacOSNsView, 42, 30));
+        runtime.PreviewStatus = FakeWorkspaceRuntimeService.CreatePreviewStatus(state);
+
+        await workspace.RefreshNowAsync();
+
+        Assert.Equal(state, workspace.Preview.State);
+        Assert.Equal(expectedText, workspace.Preview.StateText);
+        Assert.Equal(expectedIcon, workspace.Preview.HealthIcon);
+        Assert.Equal(
+            state == ViewPreviewRuntimeState.Live ? "Preview 30.0 fps" : "Preview 0.0 fps",
+            workspace.Preview.PresentationFpsText);
+        Assert.Equal("Frame age 5 ms", workspace.Preview.FrameAgeText);
+    }
+
+    [Fact]
+    public async Task PreviewAttachFailureIsNonModalAndDoesNotEscapeToWindowCode()
+    {
+        var runtime = new FakeWorkspaceRuntimeService
+        {
+            AttachPreviewException = new Exception("native platform detail"),
+        };
+        await using var workspace = new WorkspaceViewModel(runtime);
+
+        workspace.Preview.Attach(new PreviewHostSurface(PreviewHostPlatform.WindowsHwnd, 42, 30));
+
+        Assert.Equal(ViewPreviewRuntimeState.Failed, workspace.Preview.State);
+        Assert.False(workspace.Preview.Attached);
+        Assert.Equal("Preview attach failed.", workspace.Preview.OperatorMessage);
+        Assert.DoesNotContain("native platform detail", workspace.Preview.OperatorMessage);
+    }
+
     [Fact]
     public async Task DisposingWorkspaceReleasesEveryRuntimeReference()
     {
@@ -236,6 +295,7 @@ public sealed class WorkspaceViewModelTests
         Assert.Null(GetRuntimeField(workspace.Cameras[0]));
         Assert.Null(GetRuntimeField(workspace.View.Slots[0]));
         Assert.Null(GetRuntimeField(workspace.Outputs[0]));
+        Assert.Null(GetRuntimeField(workspace.Preview));
     }
 
     [Fact]

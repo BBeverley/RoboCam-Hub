@@ -99,6 +99,117 @@ public sealed class ShowRuntimeTests
     }
 
     [Fact]
+    public void PreviewRuntimeAttachesToExistingViewWithoutChangingMediaOwnership()
+    {
+        var factory = new RecordingNativeRuntimeFactory();
+        using var show = CreateCompleteRuntime(factory, start: true);
+        var before = show.GetDiagnostics();
+        var view = show.GetView("view-main");
+
+        using var preview = view.AttachPreview(new PreviewHostSurface(
+            PreviewHostPlatform.MacOSNsView,
+            42,
+            30));
+        var status = preview.GetStatus();
+        var after = show.GetDiagnostics();
+
+        Assert.Equal(ViewPreviewRuntimeState.Live, status.State);
+        Assert.True(status.Attached);
+        Assert.Equal("view-main", status.ViewId);
+        Assert.Equal((uint)30_000, status.PresentationFpsMilli);
+        Assert.Equal(before.ActiveRtspSessionTotal, after.ActiveRtspSessionTotal);
+        Assert.Equal(before.ActiveDecoderTotal, after.ActiveDecoderTotal);
+        Assert.Equal(before.ViewCount, after.ViewCount);
+        Assert.Single(show.Previews);
+        Assert.Contains("preview:create:view-main:MacOSNsView:30", factory.Events);
+    }
+
+    [Fact]
+    public void PreviewCanAttachAndDetachRepeatedlyWithoutRetainingOwnership()
+    {
+        var factory = new RecordingNativeRuntimeFactory();
+        using var show = ShowRuntime.Create(factory);
+        var view = show.AddView(new ViewDefinition("view-main", "Main"));
+
+        for (var iteration = 0; iteration < 100; iteration++)
+        {
+            var preview = view.AttachPreview(new PreviewHostSurface(
+                PreviewHostPlatform.WindowsHwnd,
+                42,
+                30));
+            Assert.Single(show.Previews);
+            preview.Dispose();
+            Assert.Empty(show.Previews);
+        }
+
+        Assert.Equal(100, factory.Events.Count(item => item == "preview:dispose:view-main"));
+    }
+
+    [Fact]
+    public void PreviewCanSwitchViewsWithoutRetainingThePreviousAttachment()
+    {
+        var factory = new RecordingNativeRuntimeFactory();
+        using var show = ShowRuntime.Create(factory);
+        var first = show.AddView(new ViewDefinition("view-one", "One"));
+        var second = show.AddView(new ViewDefinition("view-two", "Two"));
+        var host = new PreviewHostSurface(PreviewHostPlatform.MacOSNsView, 42, 30);
+
+        var firstPreview = first.AttachPreview(host);
+        firstPreview.Dispose();
+        using var secondPreview = second.AttachPreview(host);
+
+        Assert.True(firstPreview.IsDisposed);
+        Assert.False(secondPreview.IsDisposed);
+        Assert.Same(second, secondPreview.View);
+        Assert.Single(show.Previews);
+        AssertOrder(
+            factory.Events,
+            "preview:create:view-one:MacOSNsView:30",
+            "preview:dispose:view-one",
+            "preview:create:view-two:MacOSNsView:30");
+    }
+
+    [Fact]
+    public void ViewAndShowDisposalReleasePreviewBeforeDependentNativeOwners()
+    {
+        var viewFactory = new RecordingNativeRuntimeFactory();
+        using (var show = CreateCompleteRuntime(viewFactory, start: true))
+        {
+            var view = show.GetView("view-main");
+            var preview = view.AttachPreview(new PreviewHostSurface(
+                PreviewHostPlatform.MacOSNsView,
+                42,
+                30));
+
+            view.Dispose();
+
+            Assert.True(preview.IsDisposed);
+            Assert.Empty(show.Previews);
+            AssertOrder(
+                viewFactory.Events,
+                "preview:dispose:view-main",
+                "sender:dispose:ROBOCAM - MAIN",
+                "view:dispose:view-main");
+        }
+
+        var showFactory = new RecordingNativeRuntimeFactory();
+        var wholeShow = CreateCompleteRuntime(showFactory, start: true);
+        wholeShow.GetView("view-main").AttachPreview(new PreviewHostSurface(
+            PreviewHostPlatform.WindowsHwnd,
+            42,
+            30));
+
+        wholeShow.Dispose();
+
+        AssertOrder(
+            showFactory.Events,
+            "preview:dispose:view-main",
+            "sender:dispose:ROBOCAM - MAIN",
+            "view:dispose:view-main",
+            "engine:dispose");
+    }
+
+    [Fact]
     public void MissingLogicalReferencesFailBeforeNativeCreation()
     {
         var factory = new RecordingNativeRuntimeFactory();

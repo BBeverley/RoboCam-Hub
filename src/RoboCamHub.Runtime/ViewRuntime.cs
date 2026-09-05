@@ -78,6 +78,12 @@ public sealed class ViewRuntime : IDisposable
             status.FreezeCacheHasFrame);
     }
 
+    public ViewPreviewRuntime AttachPreview(PreviewHostSurface host)
+    {
+        ThrowIfUnavailable();
+        return _owner.AttachPreview(this, host.Validate());
+    }
+
     public void Dispose()
     {
         _owner.DisposeView(this);

@@ -239,9 +239,13 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
 
     private void ApplyLiveAssignment(string? cameraId)
     {
+        var assignmentChanged = !string.Equals(AssignedCameraId, cameraId, StringComparison.Ordinal);
         AssignedCameraId = cameraId;
         AssignedCameraName = ResolveCameraName(cameraId);
-        SelectedCamera = AvailableCameras.FirstOrDefault(camera => camera.Definition.Id == cameraId);
+        if (assignmentChanged)
+        {
+            SelectedCamera = AvailableCameras.FirstOrDefault(camera => camera.Definition.Id == cameraId);
+        }
         RaiseCommandState();
     }
 

@@ -5,10 +5,12 @@
     <Project Path="src/RoboCamHub.Licensing/RoboCamHub.Licensing.csproj" />
     <Project Path="src/RoboCamHub.NativeInterop/RoboCamHub.NativeInterop.csproj" />
     <Project Path="src/RoboCamHub.Persistence/RoboCamHub.Persistence.csproj" />
+    <Project Path="src/RoboCamHub.Runtime/RoboCamHub.Runtime.csproj" />
   </Folder>
   <Folder Name="/tests/" />
   <Folder Name="/tests/managed/">
     <Project Path="tests/managed/RoboCamHub.Domain.Tests/RoboCamHub.Domain.Tests.csproj" />
     <Project Path="tests/managed/RoboCamHub.NativeInterop.Tests/RoboCamHub.NativeInterop.Tests.csproj" />
+    <Project Path="tests/managed/RoboCamHub.Runtime.Tests/RoboCamHub.Runtime.Tests.csproj" />
   </Folder>
 </Solution>

@@ -14,4 +14,7 @@ public readonly record struct NativeCameraStatus(
     ulong LatestFrameAgeMs,
     uint ReconnectAttemptCount,
     uint SuccessfulReconnectCount,
-    uint NextRetryDelayMs);
+    uint NextRetryDelayMs,
+    uint DirectFrameConsumerCount,
+    uint BoundViewSourceCount,
+    uint TotalFrameConsumerCount);

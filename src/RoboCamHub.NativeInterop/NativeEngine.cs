@@ -108,7 +108,10 @@ public sealed class NativeEngine : IDisposable
                 nativeStatus.latest_frame_age_ms,
                 nativeStatus.reconnect_attempt_count,
                 nativeStatus.successful_reconnect_count,
-                nativeStatus.next_retry_delay_ms)
+                nativeStatus.next_retry_delay_ms,
+                nativeStatus.direct_frame_consumer_count,
+                nativeStatus.bound_view_source_count,
+                nativeStatus.total_frame_consumer_count)
             : default;
 
         return result;
@@ -179,23 +182,47 @@ public sealed class NativeEngine : IDisposable
                 nativeDiagnostics.cameras_waiting_to_retry_count,
                 nativeDiagnostics.cameras_failed_count,
                 nativeDiagnostics.cameras_stopped_count,
-                nativeDiagnostics.successful_reconnect_total)
+                nativeDiagnostics.successful_reconnect_total,
+                nativeDiagnostics.view_count,
+                nativeDiagnostics.direct_frame_consumer_count,
+                nativeDiagnostics.total_bound_view_source_count)
             : default;
 
         return result;
+    }
+
+    public NativeResult TryCreateView(string viewId, out NativeView? view)
+    {
+        var result = NativeMethods.ViewCreate(
+            GetHandleOrThrow(),
+            ValidateStableId(viewId, nameof(viewId), "View ID"),
+            out var handle);
+
+        if (result != NativeResult.Ok || handle is null || handle.IsInvalid)
+        {
+            handle?.Dispose();
+            view = null;
+            return result == NativeResult.Ok ? NativeResult.InternalError : result;
+        }
+
+        view = new NativeView(handle);
+        return NativeResult.Ok;
     }
 
     private NativeEngineHandle GetHandleOrThrow()
         => Volatile.Read(ref _handle) ?? throw new ObjectDisposedException(nameof(NativeEngine));
 
     private static string ValidateCameraId(string cameraId)
+        => ValidateStableId(cameraId, nameof(cameraId), "Camera ID");
+
+    private static string ValidateStableId(string value, string parameterName, string description)
     {
-        if (string.IsNullOrWhiteSpace(cameraId))
+        if (string.IsNullOrWhiteSpace(value))
         {
-            throw new ArgumentException("Camera ID must be a non-empty UTF-8 string.", nameof(cameraId));
+            throw new ArgumentException($"{description} must be a non-empty UTF-8 string.", parameterName);
         }
 
-        return cameraId;
+        return value;
     }
 
     private static void ValidateCameraConfig(in NativeCameraConfig config)

@@ -9,4 +9,7 @@ public readonly record struct NativeEngineDiagnostics(
     uint CamerasWaitingToRetryCount,
     uint CamerasFailedCount,
     uint CamerasStoppedCount,
-    ulong SuccessfulReconnectTotal);
+    ulong SuccessfulReconnectTotal,
+    uint ViewCount,
+    uint DirectFrameConsumerCount,
+    uint TotalBoundViewSourceCount);

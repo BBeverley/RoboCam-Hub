@@ -75,6 +75,9 @@ dotnet restore RoboCamHub.slnx
 dotnet build RoboCamHub.slnx --configuration Release --no-restore --warnaserror
 dotnet test tests/managed/RoboCamHub.Domain.Tests/RoboCamHub.Domain.Tests.csproj --configuration Release --no-build --no-restore
 dotnet test tests/managed/RoboCamHub.NativeInterop.Tests/RoboCamHub.NativeInterop.Tests.csproj --configuration Release --no-build --no-restore
+dotnet test tests/managed/RoboCamHub.Runtime.Tests/RoboCamHub.Runtime.Tests.csproj --configuration Release --no-build --no-restore
 ```
 
-The managed build invokes CMake to stage `robocamhub_native` beside the NativeInterop test assembly, so the final test command exercises the real C ABI library on the current platform.
+The NativeInterop and Runtime integration test projects invoke CMake to stage
+`robocamhub_native` beside their test assemblies, so the final two test commands
+exercise the real C ABI library on the current platform.

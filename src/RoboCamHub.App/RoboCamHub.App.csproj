@@ -21,6 +21,6 @@
     <ProjectReference Include="..\RoboCamHub.Domain\RoboCamHub.Domain.csproj" />
     <ProjectReference Include="..\RoboCamHub.Persistence\RoboCamHub.Persistence.csproj" />
     <ProjectReference Include="..\RoboCamHub.Licensing\RoboCamHub.Licensing.csproj" />
-    <ProjectReference Include="..\RoboCamHub.NativeInterop\RoboCamHub.NativeInterop.csproj" />
+    <ProjectReference Include="..\RoboCamHub.Runtime\RoboCamHub.Runtime.csproj" />
   </ItemGroup>
 </Project>

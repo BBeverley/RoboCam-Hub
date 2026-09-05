@@ -1,0 +1,28 @@
+namespace RoboCamHub.NativeInterop;
+
+public readonly record struct NativeViewStatus(
+    uint BoundSourceCount,
+    uint SourcesWithFrameCount,
+    uint StaleOrMissingSourceCount,
+    ulong LastObservedSourceSequence,
+    NativeViewState State,
+    uint ConfiguredWidth,
+    uint ConfiguredHeight,
+    uint TargetFps,
+    ulong RenderFrameCount,
+    ulong LatestComposedFrameSequence,
+    ulong LatestComposedFrameAgeMs,
+    uint RenderFpsMilli,
+    uint SourcesContributingCount,
+    uint OutputConsumerCount,
+    uint LastRenderDurationUs,
+    uint AverageRenderDurationUs,
+    uint P95RenderDurationUs,
+    uint StaleSourceFrameCount,
+    uint LiveSourceCount,
+    uint WaitingForFirstFrameCount,
+    uint FrozenSourceCount,
+    uint ReconnectingSourceCount,
+    ulong RenderDeadlineMissCount,
+    ulong LastRenderDeadlineMissUs,
+    ulong LastRenderDeadlineMissSequence);

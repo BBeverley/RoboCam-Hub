@@ -141,6 +141,15 @@ rch_engine_diagnostics_v1 EngineDiagnostics(rch_engine_handle engine, bool& ok)
   return diagnostics;
 }
 
+rch_view_status_v1 ViewStatus(rch_view_handle view, bool& ok)
+{
+  rch_view_status_v1 status{};
+  status.struct_size = static_cast<std::uint32_t>(sizeof(status));
+  status.struct_version = RCH_VIEW_STATUS_VERSION;
+  ok = rch_view_get_status(view, &status) == RCH_RESULT_OK;
+  return status;
+}
+
 rch_frame_lease_status_v1 LeaseStatus(rch_frame_lease_handle lease, bool& ok)
 {
   rch_frame_lease_status_v1 status{};
@@ -434,24 +443,6 @@ int main()
     return 1;
   }
 
-  if (!Expect(rch_view_destroy(view) == RCH_RESULT_OK, "destroying view must succeed")) {
-    rch_frame_consumer_destroy(consumer_a);
-    rch_engine_destroy(engine);
-    return 1;
-  }
-  view = nullptr;
-
-  camera_status = CameraStatus(engine, camera_id.c_str(), ok);
-  if (!Expect(ok, "camera status must remain queryable after view destroy")
-      || !Expect(camera_status.state == RCH_CAMERA_STATE_RECEIVING,
-                 "destroying view must not stop ingest")
-      || !Expect(camera_status.bound_view_source_count == 0,
-                 "view binding count must return to zero")) {
-    rch_frame_consumer_destroy(consumer_a);
-    rch_engine_destroy(engine);
-    return 1;
-  }
-
   if (!Expect(rch_camera_stop_by_id(engine, camera_id.c_str()) == RCH_RESULT_OK,
               "stop while consumer remains attached must succeed")
       || !Expect(rch_camera_start_by_id(engine, camera_id.c_str()) == RCH_RESULT_OK,
@@ -481,20 +472,64 @@ int main()
   if (!Expect(WaitForReceiving(engine, camera_id.c_str(), std::chrono::seconds(8), camera_status),
               "camera must recover with the same attached consumer after reconnect")) {
     rch_frame_consumer_destroy(consumer_a);
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  const auto pre_remove_diagnostics = EngineDiagnostics(engine, ok);
+  if (!Expect(ok, "engine diagnostics query must succeed before remove")
+      || !Expect(pre_remove_diagnostics.active_rtsp_session_total == 1
+                   && pre_remove_diagnostics.active_decoder_total == 1,
+                 "pre-remove ownership must remain one session and one decoder")) {
+    rch_frame_consumer_destroy(consumer_a);
+    rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;
   }
 
   if (!Expect(rch_camera_remove(engine, camera_id.c_str()) == RCH_RESULT_OK,
-              "camera removal must succeed with active consumer")
+              "camera removal must succeed with active consumer and bound view source")
       || !Expect(rch_frame_consumer_acquire_latest(consumer_a, &held_by_a) == RCH_RESULT_NOT_CONFIGURED,
                  "active consumer must become stale after camera removal")
       || !Expect(rch_camera_get_status_by_id(engine, camera_id.c_str(), &camera_status) == RCH_RESULT_NOT_CONFIGURED,
                  "removed camera status must return not-configured")) {
     rch_frame_consumer_destroy(consumer_a);
+    rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;
   }
+
+  auto view_status = ViewStatus(view, ok);
+  if (!Expect(ok, "view status must remain queryable after bound camera removal")
+      || !Expect(view_status.bound_source_count == 1,
+                 "stale view must still report the bound source slot")
+      || !Expect(view_status.stale_or_missing_source_count == 1,
+                 "removed camera must be reported as stale/missing in bound view")) {
+    rch_frame_consumer_destroy(consumer_a);
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  const auto post_remove_diagnostics = EngineDiagnostics(engine, ok);
+  if (!Expect(ok, "engine diagnostics query must succeed after remove")
+      || !Expect(post_remove_diagnostics.active_rtsp_session_total == 0
+                   && post_remove_diagnostics.active_decoder_total == 0,
+                 "removed camera must leave no active RTSP/decoder ownership")) {
+    rch_frame_consumer_destroy(consumer_a);
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  if (!Expect(rch_view_destroy(view) == RCH_RESULT_OK,
+              "destroying stale view after camera removal must be safe")) {
+    rch_frame_consumer_destroy(consumer_a);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+  view = nullptr;
 
   const rch_camera_config_v1 readd_config{
     static_cast<std::uint32_t>(sizeof(rch_camera_config_v1)),
@@ -518,9 +553,27 @@ int main()
 
   rch_view_handle view_b = nullptr;
   if (!Expect(rch_view_create(engine, "view-b", &view_b) == RCH_RESULT_OK,
-              "second view create must succeed")
-      || !Expect(rch_view_bind_camera_source(view_b, 0, camera_id.c_str()) == RCH_RESULT_OK,
-                 "second view bind must succeed")) {
+              "second view create must succeed")) {
+    rch_frame_consumer_destroy(consumer_a);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  view_status = ViewStatus(view_b, ok);
+  if (!Expect(ok, "newly created view status must succeed")
+      || !Expect(view_status.bound_source_count == 0,
+                 "stale bindings from removed views must not silently carry forward on re-add")
+      || !Expect(view_status.stale_or_missing_source_count == 0,
+                 "new view must start with no stale bindings")) {
+    rch_view_destroy(view_b);
+    rch_frame_consumer_destroy(consumer_a);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  if (!Expect(rch_view_bind_camera_source(view_b, 0, camera_id.c_str()) == RCH_RESULT_OK,
+              "re-add flow must explicitly rebind view sources")) {
+    rch_view_destroy(view_b);
     rch_frame_consumer_destroy(consumer_a);
     rch_engine_destroy(engine);
     return 1;
@@ -539,6 +592,18 @@ int main()
   if (!Expect(ok, "status must succeed after re-add + rebind")
       || !Expect(camera_status.active_rtsp_session_count == 1 && camera_status.active_decoder_count == 1,
                  "re-add/rebind must not create duplicate ingest ownership")) {
+    rch_frame_consumer_destroy(consumer_c);
+    rch_view_destroy(view_b);
+    rch_frame_consumer_destroy(consumer_a);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  const auto post_rebind_diagnostics = EngineDiagnostics(engine, ok);
+  if (!Expect(ok, "engine diagnostics must succeed after explicit rebind")
+      || !Expect(post_rebind_diagnostics.active_rtsp_session_total == 1
+                   && post_rebind_diagnostics.active_decoder_total == 1,
+                 "explicit rebind after re-add must still keep exact 1/1 ownership")) {
     rch_frame_consumer_destroy(consumer_c);
     rch_view_destroy(view_b);
     rch_frame_consumer_destroy(consumer_a);

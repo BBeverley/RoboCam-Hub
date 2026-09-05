@@ -99,6 +99,37 @@ rch_enable_sanitizers(robocamhub_compositor_2x2_tests)
 add_test(NAME robocamhub_native.compositor_2x2 COMMAND robocamhub_compositor_2x2_tests)
 set_tests_properties(robocamhub_native.compositor_2x2 PROPERTIES TIMEOUT 90)
 
+add_executable(robocamhub_ndi_sender_tests ndi_sender_test.cpp)
+target_compile_features(robocamhub_ndi_sender_tests PRIVATE cxx_std_20)
+target_link_libraries(robocamhub_ndi_sender_tests PRIVATE robocamhub_native PkgConfig::GSTREAMER_RTSP_SERVER Threads::Threads)
+set_target_properties(robocamhub_ndi_sender_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_ndi_sender_tests)
+rch_enable_sanitizers(robocamhub_ndi_sender_tests)
+add_test(NAME robocamhub_native.ndi_sender COMMAND robocamhub_ndi_sender_tests)
+set_tests_properties(robocamhub_native.ndi_sender PROPERTIES TIMEOUT 30)
+
+# Compile the native engine into a test-only executable so deterministic backend
+# latency can be injected without exporting a test hook from the shared-library ABI.
+add_executable(robocamhub_ndi_sender_slow_backend_tests
+  ndi_sender_slow_backend_test.cpp
+  ../src/engine/robocamhub_native.cpp
+  ../src/ingest/single_camera_ingest.cpp
+  ../src/frames/latest_frame.cpp
+)
+target_compile_definitions(robocamhub_ndi_sender_slow_backend_tests PRIVATE
+  RCH_NDI_SENDER_TESTING
+  ROBOCAMHUB_NATIVE_BUILD
+)
+target_compile_features(robocamhub_ndi_sender_slow_backend_tests PRIVATE cxx_std_20)
+target_include_directories(robocamhub_ndi_sender_slow_backend_tests PRIVATE ../src ../include)
+target_link_libraries(robocamhub_ndi_sender_slow_backend_tests PRIVATE PkgConfig::GSTREAMER Threads::Threads)
+set_target_properties(robocamhub_ndi_sender_slow_backend_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_ndi_sender_slow_backend_tests)
+rch_enable_sanitizers(robocamhub_ndi_sender_slow_backend_tests)
+add_test(NAME robocamhub_native.ndi_sender_slow_backend
+         COMMAND robocamhub_ndi_sender_slow_backend_tests)
+set_tests_properties(robocamhub_native.ndi_sender_slow_backend PROPERTIES TIMEOUT 15)
+
 # Compile the actual ingest implementation separately so deterministic scheduling
 # hooks and private test access never enter the shared library or exported ABI.
 add_executable(robocamhub_ingest_regression_tests

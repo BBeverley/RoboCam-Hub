@@ -135,21 +135,21 @@ int main()
     return 1;
   }
 
-  alignas(rch_camera_status_v1) std::uint8_t v1_buffer[StatusV1Size() + 16];
-  std::memset(v1_buffer, 0xA5, sizeof(v1_buffer));
-  auto* legacy_status = reinterpret_cast<rch_camera_status_v1*>(v1_buffer);
-  legacy_status->struct_size = StatusV1Size();
-  legacy_status->struct_version = RCH_CAMERA_STATUS_VERSION_V1;
-  if (!Expect(rch_camera_get_status(engine, legacy_status) == RCH_RESULT_OK,
+  rch_camera_status_v1 legacy_status{};
+  std::memset(&legacy_status, 0xA5, sizeof(legacy_status));
+  legacy_status.struct_size = StatusV1Size();
+  legacy_status.struct_version = RCH_CAMERA_STATUS_VERSION_V1;
+  if (!Expect(rch_camera_get_status(engine, &legacy_status) == RCH_RESULT_OK,
               "v1 status callers must remain supported")
-      || !Expect(legacy_status->struct_size == StatusV1Size()
-                   && legacy_status->struct_version == RCH_CAMERA_STATUS_VERSION_V1,
+      || !Expect(legacy_status.struct_size == StatusV1Size()
+                   && legacy_status.struct_version == RCH_CAMERA_STATUS_VERSION_V1,
                  "v1 status call must preserve reported v1 shape")) {
     return 1;
   }
 
+  const auto* v1_buffer = reinterpret_cast<const std::uint8_t*>(&legacy_status);
   bool canary_intact = true;
-  for (std::size_t offset = StatusV1Size(); offset < sizeof(v1_buffer); ++offset) {
+  for (std::size_t offset = StatusV1Size(); offset < sizeof(legacy_status); ++offset) {
     if (v1_buffer[offset] != static_cast<std::uint8_t>(0xA5)) {
       canary_intact = false;
       break;

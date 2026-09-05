@@ -51,6 +51,39 @@ A View may have zero, one or multiple Outputs.
 
 Multiple Outputs may reference the same View.
 
+## Native ownership and backpressure semantics
+
+The direct native sender is intentionally attached to the clean composed View frame, not to the camera ingest pipeline. The sender consumes only the latest composed frame snapshot and drops stale frames rather than queueing them. This preserves the repository guarantee that a slow NDI consumer does not become a source-side bottleneck. The sender also remains isolated from the camera lifecycle: RTSP sessions and decoders are created once per configured logical camera and stay stable while the sender is started or stopped.
+
+The deterministic native proof therefore covers:
+
+- four configured cameras keep four RTSP sessions and four decoder pipelines;
+- sender start/stop does not change those totals;
+- newest-frame semantics prevent backlog growth on the sender path;
+- sender teardown remains safe during View destruction and engine shutdown.
+
+Sender diagnostics in this mode are sender-core/backend metrics only. They are measured from the sender worker loop and latest-composed-frame sequence progression, not from wire-level NDI interoperability.
+
+Key deterministic semantics:
+
+- `send_fps_milli` is measured over a bounded accepted-frame window; it is `0` until enough samples exist;
+- worker ticks are tracked separately from unique composed sequences observed;
+- `sent_frame_count` increments only when the backend accepts a frame publish attempt;
+- dropped/skipped counts are sequence-aware where deterministically inferable (missing frame, duplicate sequence tick, observed sequence gaps);
+- `receiver_count` is `0`/unknown unless the official SDK backend reports a real value.
+
+The deterministic backend remains the CI proof boundary when the proprietary SDK is absent. Gate 4A also completed a separate live proof with the installed official SDK, recorded below.
+
+## SDK and live validation status
+
+This repository intentionally does not check in any proprietary NDI SDK content. The production integration path installs the official NDI SDK on the build host and allows CMake to discover it through the standard vendor installation variables or prefixes. Public CI continues to exercise the deterministic backend because it does not install or redistribute the proprietary SDK.
+
+Gate 4A live validation used NDI SDK 6.3.2.0 on macOS 14.7.1 x86_64 with NDI Video Monitor 5.2. The receiver discovered `ROBOCAM - Gate4A` and the 2×2 View was visually confirmed. The sender published 1920×1080 RGBA with a declared 60/1 rate through the direct RGBA SDK path, with no application color conversion or explicit full-frame copy.
+
+The 600-second exercise completed normally. A single-source outage produced three live quadrants and one frozen quadrant while NDI continued running. Reconnection restored all four live quadrants without recreating the sender. Receiver disconnect/reconnect did not rebuild ingest, the View, or the sender. RTSP-session and decoder ownership remained bounded at exactly four of each while all sources were healthy, and final shutdown released both totals to zero.
+
+This proof used four independent local RTSP/H.264 sources rather than four physical cameras, and receiver traffic was loopback. Official-SDK runtime validation on Windows and Apple Silicon, remote-network behavior, and grandMA3 interoperability remain unverified. The formal four-hour profiling soak is still deferred. RSS rose during the 10-minute run and was nearly flat in its final minute, but that observation does not prove leak freedom.
+
 ## Naming
 
 Each Output has two related names.

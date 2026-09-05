@@ -163,6 +163,59 @@ Initial target:
 
 NDI HX variants may be added later if useful, but they should not be the first implementation target because followspot monitoring prioritises latency over bandwidth efficiency.
 
+## Gate 4A ownership path
+
+For Gate 4A, the sender must remain a direct native publication of the already-composed View frame. It does not own a second ingest pipeline, does not create a second RTSP connection, and does not create an extra decoder. The sender binds to the latest composed frame output of an existing View and consumes newest-frame semantics without queue growth.
+
+The implementation contract remains:
+
+```text
+configured camera
+  → one RTSP session
+  → one decoder pipeline
+  → shared latest-frame state
+  → View compositor
+  → direct sender from composed frame
+```
+
+This ensures that slow output or a stalled sender cannot back-pressure camera ingest. The sender is a bounded output consumer, not a second production camera path.
+
+## Official SDK discovery
+
+The official NDI SDK is not bundled in this repository and must not be committed. CMake discovers it from an installed SDK location without shipping proprietary binaries or scripts. Set `RCH_NDI_SDK_ROOT`, `NDI_SDK_ROOT`, `NDI_SDK_DIR`, or `NDI_INSTALL_DIR`, or provide standard CMake include/library search paths. On macOS, the vendor's standard `/Library/NDI SDK for Apple` installation is also discovered automatically. The configured build reports both the selected include directory and library.
+
+`RCH_ENABLE_NDI_SDK=ON` is the default. When both the header and library are found, the production native library builds the official adapter. Failure to initialise the discovered runtime or create its sender is reported as sender creation failure; production does not silently switch to the deterministic backend.
+
+When the SDK is not discovered, the native sender runs in deterministic sender-core/backend proof mode. This mode validates lifecycle, ownership, latest-frame handoff, and bounded newest-wins behavior; it does not claim real NDI publish/discovery success.
+
+Public GitHub-hosted CI intentionally does not install or redistribute the proprietary SDK. Its Windows x64 and macOS arm64 jobs therefore compile and test the deterministic backend plus all non-NDI regressions. A local build with an externally installed official SDK is required to compile and validate real NDI interoperability.
+
+## Gate 4A official sender lifecycle and frame format
+
+Gate 4A owns one official NDI runtime reference and one SDK sender instance per native sender handle. The sender is created with `clock_video=true`, `clock_audio=false`, and is retained across start/stop and receiver disconnect/reconnect. Destroy first joins the existing bounded worker, then destroys the SDK sender and releases the runtime reference. SDK types remain private to the adapter and never cross the plain C ABI.
+
+The existing View produces tightly packed 1920×1080 RGBA progressive frames at a nominal 60 fps. The official SDK exposes `NDIlib_FourCC_video_type_RGBA`, so the adapter maps the retained GStreamer buffer read-only and calls the synchronous `NDIlib_send_send_video_v2` API with that pointer and a `width × 4` stride. RoboCam-Hub performs no per-frame color conversion and adds no full-frame copy. The synchronous API is deliberate: the lease stays valid for exactly the call, avoiding the extra in-flight buffers required by the SDK's asynchronous API. Any SDK-internal compression or conversion remains owned by the SDK.
+
+The call runs only on the existing bounded sender worker. If it is slow, the View compositor continues independently and the next worker iteration acquires the newest composed frame rather than draining a queue. Receiver count is sampled through the SDK's non-blocking connection-count query at most once per second and exposed through the existing low-frequency sender status.
+
+For a real four-camera proof, configure with `RCH_ENABLE_NDI_SDK=ON` and run the manual probe:
+
+```shell
+cmake -S native -B native/build-ndi -DBUILD_TESTING=ON -DRCH_BUILD_NDI_PROBE=ON -DRCH_ENABLE_NDI_SDK=ON -DRCH_NDI_SDK_ROOT="/path/to/installed/NDI SDK" -DCMAKE_BUILD_TYPE=Release
+cmake --build native/build-ndi --config Release --parallel
+native/build-ndi/bin/robocamhub_ndi_sender_probe 600 <rtsp-url-1> <rtsp-url-2> <rtsp-url-3> <rtsp-url-4>
+```
+
+The probe uses the fixed `ROBOCAM - Gate4A` source name and refuses to run when only the deterministic backend is active. It reports View/sender cadence, frame age, send duration, skipped sequences, receiver count, individual camera state, and aggregate RTSP/decoder ownership each second. It does not replace receiver-side visual validation.
+
+## Gate 4A validation result
+
+Gate 4A completed a 600-second official-SDK proof using NDI SDK 6.3.2.0 on macOS 14.7.1 x86_64 with NDI Video Monitor 5.2. `ROBOCAM - Gate4A` was discovered and its four-section 2×2 View was visually confirmed. The sender published 1920×1080 RGBA with a declared 60/1 rate using the direct RGBA path described above, with no application color conversion or explicit full-frame copy.
+
+During a single-source outage, the View reported three live quadrants and one frozen quadrant while NDI continued. Reconnection restored four live quadrants without sender recreation. Disconnecting and reconnecting the receiver did not rebuild ingest, the View, or the sender. With all sources healthy, aggregate ownership remained bounded at exactly four RTSP sessions and four decoders; normal shutdown released both totals to zero.
+
+The proof used four independent local RTSP/H.264 sources rather than four physical cameras, and receiver traffic was loopback. Official-SDK runtime validation remains unverified on Windows and Apple Silicon, as do grandMA3 interoperability and remote-NIC behavior. The formal four-hour profiling soak remains deferred. The 10-minute RSS trend does not establish leak freedom.
+
 ## View resolution vs output resolution
 
 A View and an NDI Output are independent.

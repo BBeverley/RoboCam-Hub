@@ -43,6 +43,17 @@ Render / Compositor
 
 A View must not own a camera connection. It references logical sources managed by the camera subsystem.
 
+## Gate 3A foundation status
+
+Gate 3A establishes the ownership foundation only:
+
+- native View objects with stable IDs;
+- source-slot bind/unbind by logical camera ID;
+- shared latest-frame fan-out from camera ingest into bound View sources;
+- low-frequency diagnostics for bound-source and source-freshness state.
+
+Gate 3A intentionally does not deliver full 2x2 composition output yet.
+
 Replacing the physical camera assigned to `Spot 2` must therefore update every View using `Spot 2` automatically.
 
 ## Multiple Views
@@ -193,6 +204,9 @@ Each View should have an explicit output canvas, initially targeting common prod
 The renderer must not wait for every camera to produce a matching timestamp before rendering a frame.
 
 For each camera object, use the newest completed frame currently available.
+
+Before Gate 3B, this remains a minimal native source-binding/runtime foundation
+rather than a complete production compositor backend.
 
 A slow or missing camera must never cause healthy camera tiles to gain latency.
 

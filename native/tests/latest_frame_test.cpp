@@ -96,6 +96,11 @@ int main()
     latest_frame.Publish(first);
     gst_sample_unref(first);
 
+    auto first_lease = latest_frame.AcquireLease();
+    if (!Expect(first_lease.has_frame, "acquired lease must expose the current frame")) {
+      return 1;
+    }
+
     auto snapshot = latest_frame.Snapshot();
     if (!Expect(latest_frame.RetainedFrameCount() == 1,
                 "latest-frame storage must retain exactly one frame")
@@ -111,11 +116,18 @@ int main()
 
     if (!Expect(latest_frame.RetainedFrameCount() == 1,
                 "publishing must replace rather than queue frames")
-        || !Expect(finalized_buffers == 1, "replaced frame storage must be released immediately")
+        || !Expect(finalized_buffers == 0,
+                   "replaced storage must remain alive while a consumer lease exists")
         || !Expect(snapshot.frame_count == 2 && snapshot.sequence == 2,
                    "frame sequence must advance on replacement")
         || !Expect(snapshot.width == 128 && snapshot.height == 72,
                    "latest metadata must replace stale metadata")) {
+      return 1;
+    }
+
+    first_lease = {};
+    if (!Expect(finalized_buffers == 1,
+                "replaced frame storage must release when its final lease is dropped")) {
       return 1;
     }
 

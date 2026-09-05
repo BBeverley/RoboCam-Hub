@@ -28,6 +28,7 @@ public:
   rch_result Start();
   rch_result Stop();
   void FillStatus(rch_camera_status_v1& status) const;
+  [[nodiscard]] frames::LatestFrameLease AcquireLatestFrameLease() const;
 
 private:
 #if defined(RCH_INGEST_TESTING)

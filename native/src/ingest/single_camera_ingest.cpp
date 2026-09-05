@@ -180,6 +180,11 @@ void SingleCameraIngest::FillStatus(rch_camera_status_v1& status) const
   status.reserved_v2 = 0;
 }
 
+frames::LatestFrameLease SingleCameraIngest::AcquireLatestFrameLease() const
+{
+  return latest_frame_.AcquireLease();
+}
+
 rch_result SingleCameraIngest::StartPipelinePlayback()
 {
   state_.store(RCH_CAMERA_STATE_STARTING, std::memory_order_release);

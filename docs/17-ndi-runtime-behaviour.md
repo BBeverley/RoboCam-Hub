@@ -72,13 +72,17 @@ Key deterministic semantics:
 - dropped/skipped counts are sequence-aware where deterministically inferable (missing frame, duplicate sequence tick, observed sequence gaps);
 - `receiver_count` is `0`/unknown unless the official SDK backend reports a real value.
 
-This implementation is the proof boundary for Gate 4A until the official NDI SDK is installed and live receiver validation is performed.
+The deterministic backend remains the CI proof boundary when the proprietary SDK is absent. Gate 4A also completed a separate live proof with the installed official SDK, recorded below.
 
 ## SDK and live validation status
 
-This repository intentionally does not check in any proprietary NDI SDK content. The production integration path is to install the official NDI SDK on the build host and allow CMake to discover it through the standard vendor installation variables or prefixes. Real-time publish/discovery validation remains a host dependency and is not considered a passing Gate 4A result in CI without an installed official SDK and a known-good receiver on the same network.
+This repository intentionally does not check in any proprietary NDI SDK content. The production integration path installs the official NDI SDK on the build host and allows CMake to discover it through the standard vendor installation variables or prefixes. Public CI continues to exercise the deterministic backend because it does not install or redistribute the proprietary SDK.
 
-As of the current environment, the official NDI SDK is not installed locally, so live NDI discovery, source name validation, and receiver-side frame verification remain deferred until an approved SDK installation is available.
+Gate 4A live validation used NDI SDK 6.3.2.0 on macOS 14.7.1 x86_64 with NDI Video Monitor 5.2. The receiver discovered `ROBOCAM - Gate4A` and the 2×2 View was visually confirmed. The sender published 1920×1080 RGBA with a declared 60/1 rate through the direct RGBA SDK path, with no application color conversion or explicit full-frame copy.
+
+The 600-second exercise completed normally. A single-source outage produced three live quadrants and one frozen quadrant while NDI continued running. Reconnection restored all four live quadrants without recreating the sender. Receiver disconnect/reconnect did not rebuild ingest, the View, or the sender. RTSP-session and decoder ownership remained bounded at exactly four of each while all sources were healthy, and final shutdown released both totals to zero.
+
+This proof used four independent local RTSP/H.264 sources rather than four physical cameras, and receiver traffic was loopback. Official-SDK runtime validation on Windows and Apple Silicon, remote-network behavior, and grandMA3 interoperability remain unverified. The formal four-hour profiling soak is still deferred. RSS rose during the 10-minute run and was nearly flat in its final minute, but that observation does not prove leak freedom.
 
 ## Naming
 

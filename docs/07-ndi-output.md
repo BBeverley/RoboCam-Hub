@@ -208,6 +208,14 @@ native/build-ndi/bin/robocamhub_ndi_sender_probe 600 <rtsp-url-1> <rtsp-url-2> <
 
 The probe uses the fixed `ROBOCAM - Gate4A` source name and refuses to run when only the deterministic backend is active. It reports View/sender cadence, frame age, send duration, skipped sequences, receiver count, individual camera state, and aggregate RTSP/decoder ownership each second. It does not replace receiver-side visual validation.
 
+## Gate 4A validation result
+
+Gate 4A completed a 600-second official-SDK proof using NDI SDK 6.3.2.0 on macOS 14.7.1 x86_64 with NDI Video Monitor 5.2. `ROBOCAM - Gate4A` was discovered and its four-section 2×2 View was visually confirmed. The sender published 1920×1080 RGBA with a declared 60/1 rate using the direct RGBA path described above, with no application color conversion or explicit full-frame copy.
+
+During a single-source outage, the View reported three live quadrants and one frozen quadrant while NDI continued. Reconnection restored four live quadrants without sender recreation. Disconnecting and reconnecting the receiver did not rebuild ingest, the View, or the sender. With all sources healthy, aggregate ownership remained bounded at exactly four RTSP sessions and four decoders; normal shutdown released both totals to zero.
+
+The proof used four independent local RTSP/H.264 sources rather than four physical cameras, and receiver traffic was loopback. Official-SDK runtime validation remains unverified on Windows and Apple Silicon, as do grandMA3 interoperability and remote-NIC behavior. The formal four-hour profiling soak remains deferred. The 10-minute RSS trend does not establish leak freedom.
+
 ## View resolution vs output resolution
 
 A View and an NDI Output are independent.

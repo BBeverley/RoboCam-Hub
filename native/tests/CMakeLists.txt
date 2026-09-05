@@ -90,6 +90,15 @@ rch_enable_sanitizers(robocamhub_frame_fanout_tests)
 add_test(NAME robocamhub_native.frame_fanout COMMAND robocamhub_frame_fanout_tests)
 set_tests_properties(robocamhub_native.frame_fanout PROPERTIES TIMEOUT 60)
 
+add_executable(robocamhub_compositor_2x2_tests compositor_2x2_test.cpp)
+target_compile_features(robocamhub_compositor_2x2_tests PRIVATE cxx_std_20)
+target_link_libraries(robocamhub_compositor_2x2_tests PRIVATE robocamhub_native PkgConfig::GSTREAMER_RTSP_SERVER Threads::Threads)
+set_target_properties(robocamhub_compositor_2x2_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_compositor_2x2_tests)
+rch_enable_sanitizers(robocamhub_compositor_2x2_tests)
+add_test(NAME robocamhub_native.compositor_2x2 COMMAND robocamhub_compositor_2x2_tests)
+set_tests_properties(robocamhub_native.compositor_2x2 PROPERTIES TIMEOUT 90)
+
 # Compile the actual ingest implementation separately so deterministic scheduling
 # hooks and private test access never enter the shared library or exported ABI.
 add_executable(robocamhub_ingest_regression_tests

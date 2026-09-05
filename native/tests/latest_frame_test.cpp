@@ -53,6 +53,8 @@ bool RequiredPluginsAreAvailable()
     "rtph264depay",
     "h264parse",
     "avdec_h264",
+    "videoconvert",
+    "capsfilter",
     "queue",
     "appsink",
   };

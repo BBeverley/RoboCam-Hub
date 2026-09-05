@@ -1,5 +1,6 @@
 #include "robocamhub_native.h"
 
+#include "frames/latest_frame.h"
 #include "ingest/single_camera_ingest.h"
 
 #include <gst/gst.h>
@@ -7,14 +8,17 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -86,16 +90,88 @@ struct ViewSourceBinding final {
   std::uint64_t last_observed_sequence{0};
 };
 
+struct ViewSlotFreezeCache final {
+  std::string camera_id;
+  std::vector<std::uint8_t> rgba;
+  std::uint64_t last_sequence{0};
+  bool has_frame{false};
+};
+
+struct ViewRenderStats final {
+  std::uint64_t render_frame_count{0};
+  std::uint64_t latest_composed_frame_sequence{0};
+  std::uint64_t last_observed_source_sequence{0};
+  std::uint32_t bound_source_count{0};
+  std::uint32_t sources_with_frame_count{0};
+  std::uint32_t stale_or_missing_source_count{0};
+  std::uint32_t sources_contributing_count{0};
+  std::uint32_t render_fps_milli{0};
+  std::uint32_t last_render_duration_us{0};
+  std::uint32_t average_render_duration_us{0};
+  std::uint32_t p95_render_duration_us{0};
+  std::uint32_t stale_source_frame_count{0};
+};
+
+constexpr std::uint32_t kViewComposedWidth = 1920;
+constexpr std::uint32_t kViewComposedHeight = 1080;
+constexpr std::uint32_t kViewTargetFps = 60;
+constexpr std::size_t kViewComposedStride = static_cast<std::size_t>(kViewComposedWidth) * 4U;
+constexpr std::size_t kQuadrantWidth = kViewComposedWidth / 2U;
+constexpr std::size_t kQuadrantHeight = kViewComposedHeight / 2U;
+constexpr std::size_t kQuadrantStride = kQuadrantWidth * 4U;
+constexpr std::size_t kQuadrantPixels = kQuadrantWidth * kQuadrantHeight * 4U;
+
+std::uint64_t MonotonicTimeNs()
+{
+  return static_cast<std::uint64_t>(g_get_monotonic_time()) * UINT64_C(1000);
+}
+
 struct ViewState final {
   explicit ViewState(std::shared_ptr<EngineRegistry> owner, std::string id)
       : registry(std::move(owner)), view_id(std::move(id))
   {
+    composed_caps = gst_caps_new_simple(
+      "video/x-raw",
+      "format", G_TYPE_STRING, "RGBA",
+      "width", G_TYPE_INT, static_cast<int>(kViewComposedWidth),
+      "height", G_TYPE_INT, static_cast<int>(kViewComposedHeight),
+      nullptr);
+    composed_pixels.resize(static_cast<std::size_t>(kViewComposedHeight) * kViewComposedStride, 0U);
+    for (auto& cache : slot_freeze_cache) {
+      cache.rgba.resize(kQuadrantPixels, 0U);
+    }
+  }
+
+  ~ViewState()
+  {
+    stop_requested.store(true, std::memory_order_release);
+    if (render_thread.joinable()) {
+      render_thread.join();
+    }
+    latest_composed_frame.Clear();
+    if (composed_caps != nullptr) {
+      gst_caps_unref(composed_caps);
+      composed_caps = nullptr;
+    }
   }
 
   std::shared_ptr<EngineRegistry> registry;
   std::string view_id;
   std::mutex mutex;
   std::array<std::optional<ViewSourceBinding>, RCH_VIEW_MAX_SOURCE_SLOTS> sources{};
+  std::array<ViewSlotFreezeCache, 4> slot_freeze_cache{};
+  std::vector<std::uint8_t> composed_pixels;
+  GstCaps* composed_caps{nullptr};
+  robocamhub::frames::LatestFrame latest_composed_frame;
+  std::thread render_thread;
+  std::atomic<bool> stop_requested{false};
+  std::atomic<bool> render_running{false};
+  std::atomic<std::uint32_t> output_consumer_count{0};
+  std::mutex stats_mutex;
+  ViewRenderStats stats{};
+  std::deque<std::uint32_t> recent_render_durations_us;
+  std::chrono::steady_clock::time_point fps_window_start{std::chrono::steady_clock::now()};
+  std::uint64_t fps_window_frames{0};
   std::atomic<bool> removed{false};
 };
 
@@ -113,6 +189,12 @@ struct rch_frame_lease final {
 
 struct rch_view final {
   std::shared_ptr<ViewState> state;
+  std::atomic<bool> destroyed{false};
+};
+
+struct rch_view_frame_lease final {
+  std::shared_ptr<ViewState> owner;
+  robocamhub::frames::LatestFrameLease lease;
   std::atomic<bool> destroyed{false};
 };
 
@@ -227,6 +309,288 @@ void ReleaseAllViewBindings(ViewState& state)
   }
 }
 
+void FillQuadrantPlaceholder(std::vector<std::uint8_t>& output,
+                             std::size_t slot_index,
+                             std::uint8_t r,
+                             std::uint8_t g,
+                             std::uint8_t b)
+{
+  const std::size_t origin_x = (slot_index % 2U) * kQuadrantWidth;
+  const std::size_t origin_y = (slot_index / 2U) * kQuadrantHeight;
+  for (std::size_t y = 0; y < kQuadrantHeight; ++y) {
+    auto* row = output.data() + (origin_y + y) * kViewComposedStride + origin_x * 4U;
+    for (std::size_t x = 0; x < kQuadrantWidth; ++x) {
+      row[x * 4U + 0U] = r;
+      row[x * 4U + 1U] = g;
+      row[x * 4U + 2U] = b;
+      row[x * 4U + 3U] = UINT8_C(255);
+    }
+  }
+
+  // Draw deterministic diagonal marker for easy quadrant identification.
+  for (std::size_t y = 0; y < kQuadrantHeight; ++y) {
+    const std::size_t x = (y * kQuadrantWidth) / kQuadrantHeight;
+    auto* pixel = output.data() + (origin_y + y) * kViewComposedStride + (origin_x + x) * 4U;
+    pixel[0] = UINT8_C(255);
+    pixel[1] = UINT8_C(255);
+    pixel[2] = UINT8_C(255);
+    pixel[3] = UINT8_C(255);
+  }
+}
+
+void BlitQuadrantFromCache(const ViewSlotFreezeCache& cache,
+                           std::vector<std::uint8_t>& output,
+                           std::size_t slot_index)
+{
+  const std::size_t origin_x = (slot_index % 2U) * kQuadrantWidth;
+  const std::size_t origin_y = (slot_index / 2U) * kQuadrantHeight;
+  for (std::size_t y = 0; y < kQuadrantHeight; ++y) {
+    auto* dst = output.data() + (origin_y + y) * kViewComposedStride + origin_x * 4U;
+    const auto* src = cache.rgba.data() + y * kQuadrantStride;
+    std::memcpy(dst, src, kQuadrantStride);
+  }
+}
+
+bool CopyAndScaleRgbaToQuadrant(
+  GstSample* sample,
+  std::vector<std::uint8_t>& output,
+  std::size_t slot_index,
+  ViewSlotFreezeCache& freeze_cache)
+{
+  if (sample == nullptr) {
+    return false;
+  }
+
+  auto* caps = gst_sample_get_caps(sample);
+  if (caps == nullptr || gst_caps_is_empty(caps)) {
+    return false;
+  }
+  const auto* structure = gst_caps_get_structure(caps, 0);
+  const auto* format = gst_structure_get_string(structure, "format");
+  if (format == nullptr || g_ascii_strcasecmp(format, "RGBA") != 0) {
+    return false;
+  }
+
+  int src_width = 0;
+  int src_height = 0;
+  if (!gst_structure_get_int(structure, "width", &src_width)
+      || !gst_structure_get_int(structure, "height", &src_height)
+      || src_width <= 0
+      || src_height <= 0) {
+    return false;
+  }
+
+  auto* buffer = gst_sample_get_buffer(sample);
+  if (buffer == nullptr) {
+    return false;
+  }
+
+  GstMapInfo map{};
+  if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+    return false;
+  }
+
+  const std::size_t src_stride = static_cast<std::size_t>(src_width) * 4U;
+  const std::size_t required_bytes = src_stride * static_cast<std::size_t>(src_height);
+  if (map.size < required_bytes) {
+    gst_buffer_unmap(buffer, &map);
+    return false;
+  }
+
+  const std::size_t origin_x = (slot_index % 2U) * kQuadrantWidth;
+  const std::size_t origin_y = (slot_index / 2U) * kQuadrantHeight;
+  for (std::size_t y = 0; y < kQuadrantHeight; ++y) {
+    const std::size_t source_y = y * static_cast<std::size_t>(src_height) / kQuadrantHeight;
+    const auto* source_row = map.data + source_y * src_stride;
+    auto* destination_row = output.data() + (origin_y + y) * kViewComposedStride + origin_x * 4U;
+    auto* cache_row = freeze_cache.rgba.data() + y * kQuadrantStride;
+
+    for (std::size_t x = 0; x < kQuadrantWidth; ++x) {
+      const std::size_t source_x = x * static_cast<std::size_t>(src_width) / kQuadrantWidth;
+      const auto* source_pixel = source_row + source_x * 4U;
+      auto* destination_pixel = destination_row + x * 4U;
+      auto* cache_pixel = cache_row + x * 4U;
+      destination_pixel[0] = source_pixel[0];
+      destination_pixel[1] = source_pixel[1];
+      destination_pixel[2] = source_pixel[2];
+      destination_pixel[3] = source_pixel[3];
+      cache_pixel[0] = source_pixel[0];
+      cache_pixel[1] = source_pixel[1];
+      cache_pixel[2] = source_pixel[2];
+      cache_pixel[3] = source_pixel[3];
+    }
+  }
+
+  gst_buffer_unmap(buffer, &map);
+  freeze_cache.has_frame = true;
+  return true;
+}
+
+void PublishComposedFrame(ViewState& state)
+{
+  auto* buffer = gst_buffer_new_allocate(nullptr, state.composed_pixels.size(), nullptr);
+  if (buffer == nullptr) {
+    return;
+  }
+
+  gst_buffer_fill(buffer, 0, state.composed_pixels.data(), state.composed_pixels.size());
+  GST_BUFFER_PTS(buffer) = MonotonicTimeNs();
+  auto* sample = gst_sample_new(buffer, state.composed_caps, nullptr, nullptr);
+  gst_buffer_unref(buffer);
+  if (sample == nullptr) {
+    return;
+  }
+
+  state.latest_composed_frame.Publish(sample);
+  gst_sample_unref(sample);
+}
+
+void UpdateRenderDurationStats(ViewState& state, std::uint32_t duration_us)
+{
+  std::lock_guard lock(state.stats_mutex);
+  state.recent_render_durations_us.push_back(duration_us);
+  constexpr std::size_t max_window = 256;
+  if (state.recent_render_durations_us.size() > max_window) {
+    state.recent_render_durations_us.pop_front();
+  }
+
+  std::uint64_t sum = 0;
+  std::vector<std::uint32_t> sorted;
+  sorted.reserve(state.recent_render_durations_us.size());
+  for (const auto sample : state.recent_render_durations_us) {
+    sum += sample;
+    sorted.push_back(sample);
+  }
+  std::sort(sorted.begin(), sorted.end());
+
+  state.stats.last_render_duration_us = duration_us;
+  state.stats.average_render_duration_us =
+    sorted.empty() ? 0U : static_cast<std::uint32_t>(sum / sorted.size());
+  if (!sorted.empty()) {
+    const auto p95_index = static_cast<std::size_t>((sorted.size() - 1U) * 95U / 100U);
+    state.stats.p95_render_duration_us = sorted[p95_index];
+  } else {
+    state.stats.p95_render_duration_us = 0U;
+  }
+}
+
+void RenderViewLoop(const std::shared_ptr<ViewState>& state)
+{
+  state->render_running.store(true, std::memory_order_release);
+  state->fps_window_start = std::chrono::steady_clock::now();
+  state->fps_window_frames = 0;
+
+  constexpr auto frame_period = std::chrono::microseconds(1000000 / kViewTargetFps);
+  auto next_tick = std::chrono::steady_clock::now();
+
+  while (!state->stop_requested.load(std::memory_order_acquire)) {
+    const auto tick_start = std::chrono::steady_clock::now();
+
+    std::array<std::optional<ViewSourceBinding>, 4> active_sources{};
+    {
+      std::lock_guard lock(state->mutex);
+      for (std::size_t i = 0; i < active_sources.size(); ++i) {
+        active_sources[i] = state->sources[i];
+      }
+    }
+
+    std::fill(state->composed_pixels.begin(), state->composed_pixels.end(), UINT8_C(0));
+    ViewRenderStats tick_stats{};
+
+    for (std::size_t slot = 0; slot < active_sources.size(); ++slot) {
+      auto& freeze_cache = state->slot_freeze_cache[slot];
+      const auto& binding = active_sources[slot];
+      if (!binding.has_value()) {
+        FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(32), UINT8_C(32), UINT8_C(32));
+        continue;
+      }
+
+      ++tick_stats.bound_source_count;
+      if (freeze_cache.camera_id != binding->camera_id) {
+        freeze_cache.camera_id = binding->camera_id;
+        freeze_cache.has_frame = false;
+        freeze_cache.last_sequence = 0;
+      }
+
+      auto camera = binding->camera.lock();
+      if (camera == nullptr || camera->ingest == nullptr || camera->removed.load(std::memory_order_acquire)) {
+        ++tick_stats.stale_or_missing_source_count;
+        ++tick_stats.stale_source_frame_count;
+        if (freeze_cache.has_frame) {
+          BlitQuadrantFromCache(freeze_cache, state->composed_pixels, slot);
+        } else {
+          FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(48), UINT8_C(24), UINT8_C(24));
+        }
+        continue;
+      }
+
+      const auto lease = camera->ingest->AcquireLatestFrameLease();
+      if (lease.has_frame && lease.sample() != nullptr
+          && CopyAndScaleRgbaToQuadrant(lease.sample(), state->composed_pixels, slot, freeze_cache)) {
+        ++tick_stats.sources_with_frame_count;
+        ++tick_stats.sources_contributing_count;
+        freeze_cache.last_sequence = lease.sequence;
+        if (lease.sequence > tick_stats.last_observed_source_sequence) {
+          tick_stats.last_observed_source_sequence = lease.sequence;
+        }
+        continue;
+      }
+
+      ++tick_stats.stale_or_missing_source_count;
+      ++tick_stats.stale_source_frame_count;
+      if (freeze_cache.has_frame) {
+        BlitQuadrantFromCache(freeze_cache, state->composed_pixels, slot);
+      } else {
+        FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(24), UINT8_C(24), UINT8_C(48));
+      }
+    }
+
+    PublishComposedFrame(*state);
+    const auto composed_snapshot = state->latest_composed_frame.Snapshot();
+    tick_stats.latest_composed_frame_sequence = composed_snapshot.sequence;
+
+    const auto tick_end = std::chrono::steady_clock::now();
+    const auto duration_us = static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+      tick_end - tick_start).count());
+    UpdateRenderDurationStats(*state, duration_us);
+
+    {
+      std::lock_guard lock(state->stats_mutex);
+      ++state->stats.render_frame_count;
+      tick_stats.render_frame_count = state->stats.render_frame_count;
+
+      ++state->fps_window_frames;
+      const auto fps_window_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        tick_end - state->fps_window_start).count();
+      if (fps_window_elapsed >= 1000) {
+        state->stats.render_fps_milli = static_cast<std::uint32_t>(
+          (state->fps_window_frames * 1000ULL * 1000ULL)
+          / static_cast<std::uint64_t>(fps_window_elapsed));
+        state->fps_window_start = tick_end;
+        state->fps_window_frames = 0;
+      }
+
+      state->stats.bound_source_count = tick_stats.bound_source_count;
+      state->stats.sources_with_frame_count = tick_stats.sources_with_frame_count;
+      state->stats.stale_or_missing_source_count = tick_stats.stale_or_missing_source_count;
+      state->stats.sources_contributing_count = tick_stats.sources_contributing_count;
+      state->stats.last_observed_source_sequence = tick_stats.last_observed_source_sequence;
+      state->stats.latest_composed_frame_sequence = tick_stats.latest_composed_frame_sequence;
+      state->stats.stale_source_frame_count += tick_stats.stale_source_frame_count;
+    }
+
+    next_tick += frame_period;
+    const auto now = std::chrono::steady_clock::now();
+    if (next_tick > now) {
+      std::this_thread::sleep_until(next_tick);
+    } else {
+      next_tick = now;
+    }
+  }
+
+  state->render_running.store(false, std::memory_order_release);
+}
+
 extern "C" uint32_t rch_get_abi_version(void) noexcept
 {
   return RCH_ABI_VERSION;
@@ -290,6 +654,11 @@ extern "C" rch_result rch_engine_destroy(rch_engine_handle engine) noexcept
         continue;
       }
       view->removed.store(true, std::memory_order_release);
+      view->stop_requested.store(true, std::memory_order_release);
+      if (view->render_thread.joinable()) {
+        view->render_thread.join();
+      }
+      view->latest_composed_frame.Clear();
       ReleaseAllViewBindings(*view);
     }
 
@@ -958,7 +1327,23 @@ extern "C" rch_result rch_view_create(
       }
 
       view_state = std::make_shared<ViewState>(engine->registry_, view_id_utf8);
+      {
+        std::lock_guard stats_lock(view_state->stats_mutex);
+        view_state->stats = ViewRenderStats{};
+      }
       engine->registry_->views_[view_id_utf8] = view_state;
+    }
+
+    view_state->stop_requested.store(false, std::memory_order_release);
+    try {
+      view_state->render_thread = std::thread(&RenderViewLoop, view_state);
+    } catch (...) {
+      std::lock_guard lock(engine->registry_->view_registry_mutex_);
+      auto found = engine->registry_->views_.find(view_id_utf8);
+      if (found != engine->registry_->views_.end() && found->second == view_state) {
+        engine->registry_->views_.erase(found);
+      }
+      throw;
     }
 
     auto* view = new rch_view();
@@ -984,6 +1369,10 @@ extern "C" rch_result rch_view_destroy(
       return RCH_RESULT_INVALID_HANDLE;
     }
     if (view->state != nullptr) {
+      view->state->stop_requested.store(true, std::memory_order_release);
+      if (view->state->render_thread.joinable()) {
+        view->state->render_thread.join();
+      }
       auto registry = view->state->registry;
       {
         std::lock_guard lock(registry->view_registry_mutex_);
@@ -993,6 +1382,7 @@ extern "C" rch_result rch_view_destroy(
         }
       }
       view->state->removed.store(true, std::memory_order_release);
+      view->state->latest_composed_frame.Clear();
       ReleaseAllViewBindings(*view->state);
     }
     view->state.reset();
@@ -1078,8 +1468,19 @@ extern "C" rch_result rch_view_get_status(
   if (view == nullptr) {
     return RCH_RESULT_INVALID_HANDLE;
   }
-  if (out_status == nullptr || out_status->struct_version != RCH_VIEW_STATUS_VERSION_V1
-      || out_status->struct_size < sizeof(rch_view_status_v1)) {
+  if (out_status == nullptr) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  constexpr std::uint32_t view_status_v1_size =
+    static_cast<std::uint32_t>(offsetof(rch_view_status_v1, render_state));
+  const bool view_status_v1_ok =
+    out_status->struct_version == RCH_VIEW_STATUS_VERSION_V1
+    && out_status->struct_size >= view_status_v1_size;
+  const bool view_status_v2_ok =
+    out_status->struct_version == RCH_VIEW_STATUS_VERSION_V2
+    && out_status->struct_size >= sizeof(rch_view_status_v1);
+  if (!view_status_v1_ok && !view_status_v2_ok) {
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
@@ -1093,10 +1494,14 @@ extern "C" rch_result rch_view_get_status(
     }
 
     rch_view_status_v1 status{};
-    status.struct_size = static_cast<std::uint32_t>(sizeof(status));
-    status.struct_version = RCH_VIEW_STATUS_VERSION_V1;
+    status.struct_size = view_status_v2_ok
+      ? static_cast<std::uint32_t>(sizeof(status))
+      : view_status_v1_size;
+    status.struct_version = view_status_v2_ok
+      ? RCH_VIEW_STATUS_VERSION_V2
+      : RCH_VIEW_STATUS_VERSION_V1;
 
-    std::lock_guard lock(view->state->mutex);
+    std::lock_guard source_lock(view->state->mutex);
     for (auto& source : view->state->sources) {
       if (!source.has_value()) {
         continue;
@@ -1112,7 +1517,6 @@ extern "C" rch_result rch_view_get_status(
       const auto lease = camera->ingest->AcquireLatestFrameLease();
       if (lease.has_frame) {
         ++status.sources_with_frame_count;
-        source->last_observed_sequence = lease.sequence;
         if (lease.sequence > status.last_observed_source_sequence) {
           status.last_observed_source_sequence = lease.sequence;
         }
@@ -1122,7 +1526,194 @@ extern "C" rch_result rch_view_get_status(
     }
 
     status.reserved = 0;
+    if (view_status_v2_ok) {
+      const auto composed = view->state->latest_composed_frame.Snapshot();
+      std::lock_guard stats_lock(view->state->stats_mutex);
+      status.render_state = view->state->render_running.load(std::memory_order_acquire)
+        ? RCH_VIEW_RENDER_STATE_RUNNING
+        : RCH_VIEW_RENDER_STATE_STOPPED;
+      status.configured_width = kViewComposedWidth;
+      status.configured_height = kViewComposedHeight;
+      status.target_fps = kViewTargetFps;
+      status.render_frame_count = view->state->stats.render_frame_count;
+      status.latest_composed_frame_sequence = composed.sequence;
+      status.latest_composed_frame_age_ms = composed.has_frame ? composed.age_ms : RCH_NO_FRAME_AGE_MS;
+      status.render_fps_milli = view->state->stats.render_fps_milli;
+      status.sources_contributing_count = view->state->stats.sources_contributing_count;
+      status.output_consumer_count = view->state->output_consumer_count.load(std::memory_order_acquire);
+      status.reserved_v2 = 0;
+      status.last_render_duration_us = view->state->stats.last_render_duration_us;
+      status.average_render_duration_us = view->state->stats.average_render_duration_us;
+      status.p95_render_duration_us = view->state->stats.p95_render_duration_us;
+      status.stale_source_frame_count = view->state->stats.stale_source_frame_count;
+    }
+
+    std::memcpy(out_status, &status, view_status_v2_ok ? sizeof(status) : view_status_v1_size);
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_view_acquire_latest_frame(
+  rch_view_handle view,
+  rch_view_frame_lease_handle* out_lease) noexcept
+{
+  if (view == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_lease == nullptr) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  *out_lease = nullptr;
+  try {
+    if (view->destroyed.load(std::memory_order_acquire) || view->state == nullptr) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+    if (!IsRegistryActive(view->state->registry)
+        || view->state->removed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+
+    auto* lease = new rch_view_frame_lease();
+    lease->owner = view->state;
+    lease->lease = view->state->latest_composed_frame.AcquireLease();
+    view->state->output_consumer_count.fetch_add(1U, std::memory_order_acq_rel);
+    *out_lease = lease;
+    return RCH_RESULT_OK;
+  } catch (const std::bad_alloc&) {
+    return RCH_RESULT_OUT_OF_MEMORY;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_view_frame_lease_get_status(
+  rch_view_frame_lease_handle lease,
+  rch_view_frame_lease_status_v1* out_status) noexcept
+{
+  if (lease == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_status == nullptr || out_status->struct_version != RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1
+      || out_status->struct_size < sizeof(rch_view_frame_lease_status_v1)) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  try {
+    if (lease->destroyed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+
+    rch_view_frame_lease_status_v1 status{};
+    status.struct_size = static_cast<std::uint32_t>(sizeof(status));
+    status.struct_version = RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1;
+    status.has_frame = lease->lease.has_frame ? 1U : 0U;
+    status.width = lease->lease.width;
+    status.height = lease->lease.height;
+    status.reserved = 0;
+    status.composed_frame_count = lease->lease.frame_count;
+    status.latest_frame_sequence = lease->lease.sequence;
+    status.latest_frame_timestamp_ns = lease->lease.timestamp_ns;
+    status.latest_frame_age_ms = lease->lease.has_frame ? lease->lease.age_ms : RCH_NO_FRAME_AGE_MS;
     std::memcpy(out_status, &status, sizeof(status));
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_view_frame_lease_sample_rgba(
+  rch_view_frame_lease_handle lease,
+  uint32_t x,
+  uint32_t y,
+  uint8_t* out_r,
+  uint8_t* out_g,
+  uint8_t* out_b,
+  uint8_t* out_a) noexcept
+{
+  if (lease == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_r == nullptr || out_g == nullptr || out_b == nullptr || out_a == nullptr) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  try {
+    if (lease->destroyed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+    if (!lease->lease.has_frame || lease->lease.sample() == nullptr) {
+      return RCH_RESULT_INVALID_STATE;
+    }
+
+    auto* sample = lease->lease.sample();
+    auto* caps = gst_sample_get_caps(sample);
+    auto* buffer = gst_sample_get_buffer(sample);
+    if (caps == nullptr || buffer == nullptr || gst_caps_is_empty(caps)) {
+      return RCH_RESULT_INTERNAL_ERROR;
+    }
+
+    const auto* structure = gst_caps_get_structure(caps, 0);
+    const auto* format = gst_structure_get_string(structure, "format");
+    if (format == nullptr || g_ascii_strcasecmp(format, "RGBA") != 0) {
+      return RCH_RESULT_INVALID_STATE;
+    }
+
+    int width = 0;
+    int height = 0;
+    if (!gst_structure_get_int(structure, "width", &width)
+        || !gst_structure_get_int(structure, "height", &height)
+        || width <= 0
+        || height <= 0) {
+      return RCH_RESULT_INTERNAL_ERROR;
+    }
+
+    if (x >= static_cast<std::uint32_t>(width) || y >= static_cast<std::uint32_t>(height)) {
+      return RCH_RESULT_INVALID_ARGUMENT;
+    }
+
+    const auto stride = static_cast<std::size_t>(width) * 4U;
+    const auto required = stride * static_cast<std::size_t>(height);
+    GstMapInfo map{};
+    if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+      return RCH_RESULT_INTERNAL_ERROR;
+    }
+    if (map.size < required) {
+      gst_buffer_unmap(buffer, &map);
+      return RCH_RESULT_INTERNAL_ERROR;
+    }
+
+    const auto offset = static_cast<std::size_t>(y) * stride + static_cast<std::size_t>(x) * 4U;
+    *out_r = map.data[offset + 0U];
+    *out_g = map.data[offset + 1U];
+    *out_b = map.data[offset + 2U];
+    *out_a = map.data[offset + 3U];
+    gst_buffer_unmap(buffer, &map);
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_view_frame_lease_destroy(
+  rch_view_frame_lease_handle lease) noexcept
+{
+  if (lease == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+
+  try {
+    if (lease->destroyed.exchange(true, std::memory_order_acq_rel)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+    if (lease->owner != nullptr) {
+      DecrementIfPositive(lease->owner->output_consumer_count);
+    }
+    lease->lease = robocamhub::frames::LatestFrameLease{};
+    lease->owner.reset();
+    delete lease;
     return RCH_RESULT_OK;
   } catch (...) {
     return RCH_RESULT_INTERNAL_ERROR;

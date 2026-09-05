@@ -221,11 +221,14 @@ rch_result SingleCameraIngest::BuildPipeline()
   auto* depayloader = gst_element_factory_make("rtph264depay", "h264-depayloader");
   auto* parser = gst_element_factory_make("h264parse", "h264-parser");
   auto* decoder = gst_element_factory_make("avdec_h264", "h264-decoder");
+    auto* converter = gst_element_factory_make("videoconvert", "rgba-converter");
+    auto* caps_filter = gst_element_factory_make("capsfilter", "rgba-caps");
   auto* queue = gst_element_factory_make("queue", "latest-frame-boundary");
   auto* sink = gst_element_factory_make("appsink", "latest-frame-sink");
 
   if (pipeline == nullptr || source == nullptr || depayloader == nullptr || parser == nullptr
-      || decoder == nullptr || queue == nullptr || sink == nullptr) {
+      || decoder == nullptr || converter == nullptr || caps_filter == nullptr
+      || queue == nullptr || sink == nullptr) {
     if (pipeline != nullptr) {
       gst_object_unref(pipeline);
     }
@@ -240,6 +243,12 @@ rch_result SingleCameraIngest::BuildPipeline()
     }
     if (decoder != nullptr) {
       gst_object_unref(decoder);
+    }
+    if (converter != nullptr) {
+      gst_object_unref(converter);
+    }
+    if (caps_filter != nullptr) {
+      gst_object_unref(caps_filter);
     }
     if (queue != nullptr) {
       gst_object_unref(queue);
@@ -258,6 +267,9 @@ rch_result SingleCameraIngest::BuildPipeline()
   gst_util_set_object_arg(G_OBJECT(source), "buffer-mode", "none");
   gst_util_set_object_arg(G_OBJECT(source), "protocols", "udp");
   g_object_set(decoder, "max-threads", 1, nullptr);
+  auto* rgba_caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "RGBA", nullptr);
+  g_object_set(caps_filter, "caps", rgba_caps, nullptr);
+  gst_caps_unref(rgba_caps);
   g_object_set(queue,
                "max-size-buffers", 1U,
                "max-size-bytes", 0U,
@@ -273,8 +285,18 @@ rch_result SingleCameraIngest::BuildPipeline()
   callbacks.new_sample = &SingleCameraIngest::OnNewSample;
   gst_app_sink_set_callbacks(GST_APP_SINK(sink), &callbacks, this, nullptr);
 
-  gst_bin_add_many(GST_BIN(pipeline), source, depayloader, parser, decoder, queue, sink, nullptr);
-  if (!gst_element_link_many(depayloader, parser, decoder, queue, sink, nullptr)) {
+  gst_bin_add_many(
+    GST_BIN(pipeline),
+    source,
+    depayloader,
+    parser,
+    decoder,
+    converter,
+    caps_filter,
+    queue,
+    sink,
+    nullptr);
+  if (!gst_element_link_many(depayloader, parser, decoder, converter, caps_filter, queue, sink, nullptr)) {
     gst_object_unref(pipeline);
     return RCH_RESULT_GSTREAMER_ERROR;
   }

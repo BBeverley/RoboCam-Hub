@@ -331,6 +331,32 @@ Engine diagnostics now include:
 These counters are low-frequency ownership diagnostics for tests and state
 inspection, not per-frame telemetry.
 
+## Gate 3B decoded-frame format contract
+
+Gate 3B fixes the ingest-to-compositor decoded format to native `RGBA` samples
+at the latest-frame boundary.
+
+Current native path:
+
+```text
+RTSP/H.264
+  -> rtph264depay
+  -> h264parse
+  -> avdec_h264
+  -> videoconvert
+  -> capsfilter (video/x-raw,format=RGBA)
+  -> queue (max-size-buffers=1, leaky=downstream)
+  -> appsink/latest-frame owner
+```
+
+Implications:
+
+- composition reads only the current native latest-frame lease;
+- no frame payload crosses into managed C#;
+- no historical decoded-frame queue is introduced;
+- conversion remains bounded and native-only;
+- one configured camera still owns exactly one RTSP session and one decoder.
+
 ## Connection workflow
 
 For each enabled source, the camera manager should:

@@ -56,6 +56,35 @@ Gate 3A intentionally does not deliver full 2x2 composition output yet.
 
 Replacing the physical camera assigned to `Spot 2` must therefore update every View using `Spot 2` automatically.
 
+## Gate 3B fixed 2x2 spike status
+
+Gate 3B adds one minimal native compositor path for four logical camera
+bindings into one fixed 1920x1080 View.
+
+Current Gate 3B behavior:
+
+- one View render loop targets 60 fps;
+- slots 0..3 map to fixed quadrants (TL, TR, BL, BR);
+- each render tick reads the freshest available frame per bound source;
+- the render loop never waits for all sources to align;
+- one slow/missing source does not stall other quadrants;
+- output is stored as one native latest composed frame (newest wins, no queue);
+- composed-frame leases are reference-counted and race-safe;
+- destroying the View releases compositor resources without stopping cameras.
+
+Temporary source-loss policy for Gate 3B:
+
+- if a source never produced a frame, its quadrant renders a deterministic
+   placeholder;
+- if a source was previously healthy then goes missing, the quadrant freezes the
+   last-good frame until fresh frames resume.
+
+Implementation note:
+
+- this gate uses a native CPU compositor intended as a spike proof and is
+   isolated so a future GPU compositor can replace it without changing ingest
+   ownership semantics.
+
 ## Multiple Views
 
 Users may create any practical number of Views. Examples:

@@ -2,8 +2,13 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <NativeSourceDirectory>$(MSBuildProjectDirectory)/../../native</NativeSourceDirectory>
+    <NativeBuildDirectory>$(BaseIntermediateOutputPath)native/$(Configuration)</NativeBuildDirectory>
+    <NativeConfigureArguments>-DBUILD_TESTING=OFF -DRCH_BUILD_INGEST_PROBE=OFF -DRCH_BUILD_NDI_PROBE=OFF</NativeConfigureArguments>
+    <NativeConfigureArguments Condition="'$(OS)' != 'Windows_NT'">$(NativeConfigureArguments) -DCMAKE_BUILD_TYPE=$(Configuration)</NativeConfigureArguments>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,9 +23,25 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\RoboCamHub.Domain\RoboCamHub.Domain.csproj" />
+    <ProjectReference Include="..\RoboCamHub.Application\RoboCamHub.Application.csproj" />
     <ProjectReference Include="..\RoboCamHub.Persistence\RoboCamHub.Persistence.csproj" />
     <ProjectReference Include="..\RoboCamHub.Licensing\RoboCamHub.Licensing.csproj" />
-    <ProjectReference Include="..\RoboCamHub.Runtime\RoboCamHub.Runtime.csproj" />
   </ItemGroup>
+
+  <Target Name="BuildAndStageNativeLibrary" BeforeTargets="Build">
+    <Exec Command="cmake -S &quot;$(NativeSourceDirectory)&quot; -B &quot;$(NativeBuildDirectory)&quot; $(NativeConfigureArguments)" />
+    <Exec Command="cmake --build &quot;$(NativeBuildDirectory)&quot; --config $(Configuration) --parallel" />
+
+    <ItemGroup>
+      <_AppNativeLibrary Include="$(NativeBuildDirectory)/**/robocamhub_native.dll" />
+      <_AppNativeLibrary Include="$(NativeBuildDirectory)/**/librobocamhub_native.dylib" />
+      <_AppNativeLibrary Include="$(NativeBuildDirectory)/**/librobocamhub_native.so" />
+    </ItemGroup>
+
+    <Error Condition="'@(_AppNativeLibrary)' == ''"
+           Text="The native RoboCam Hub library was not produced for the application." />
+    <Copy SourceFiles="@(_AppNativeLibrary)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

@@ -76,8 +76,12 @@ dotnet build RoboCamHub.slnx --configuration Release --no-restore --warnaserror
 dotnet test tests/managed/RoboCamHub.Domain.Tests/RoboCamHub.Domain.Tests.csproj --configuration Release --no-build --no-restore
 dotnet test tests/managed/RoboCamHub.NativeInterop.Tests/RoboCamHub.NativeInterop.Tests.csproj --configuration Release --no-build --no-restore
 dotnet test tests/managed/RoboCamHub.Runtime.Tests/RoboCamHub.Runtime.Tests.csproj --configuration Release --no-build --no-restore
+dotnet test tests/managed/RoboCamHub.Application.Tests/RoboCamHub.Application.Tests.csproj --configuration Release --no-build --no-restore
+
+dotnet run --project src/RoboCamHub.App/RoboCamHub.App.csproj --configuration Release
 ```
 
 The NativeInterop and Runtime integration test projects invoke CMake to stage
-`robocamhub_native` beside their test assemblies, so the final two test commands
-exercise the real C ABI library on the current platform.
+`robocamhub_native` beside their test assemblies. The Avalonia application also
+builds and stages the native library in its output directory, so a normal
+`dotnet run` can initialise the real managed/runtime graph.

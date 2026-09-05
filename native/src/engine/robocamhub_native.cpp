@@ -267,6 +267,9 @@ struct rch_ndi_sender final {
   std::vector<std::uint32_t> recent_send_durations_us{};
   std::deque<std::chrono::steady_clock::time_point> accepted_send_times{};
   SenderBackendDispatch backend{};
+#if defined(RCH_NDI_SENDER_TESTING)
+  std::atomic<std::uint32_t> test_backend_delay_ms{0};
+#endif
 };
 
 namespace {
@@ -414,6 +417,12 @@ void NdiSenderWorker(const std::shared_ptr<ViewState>& state, rch_ndi_sender* se
     sender->has_observed_sequence.store(true, std::memory_order_release);
     sender->unique_sequence_observed_count.fetch_add(1U, std::memory_order_acq_rel);
 
+#if defined(RCH_NDI_SENDER_TESTING)
+    const auto backend_delay = sender->test_backend_delay_ms.load(std::memory_order_acquire);
+    if (backend_delay > 0U) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(backend_delay));
+    }
+#endif
     const auto backend_send = sender->backend.send == nullptr
       ? SenderBackendSendResult{}
       : sender->backend.send(lease);
@@ -678,6 +687,26 @@ extern "C" rch_result rch_ndi_sender_get_status(
     return RCH_RESULT_INTERNAL_ERROR;
   }
 }
+
+#if defined(RCH_NDI_SENDER_TESTING)
+namespace robocamhub::testing {
+
+rch_result SetNdiSenderBackendDelay(
+  rch_ndi_sender_handle sender,
+  std::uint32_t delay_ms) noexcept
+{
+  if (sender == nullptr || sender->destroyed.load(std::memory_order_acquire)) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (sender->running.load(std::memory_order_acquire) || sender->worker.joinable()) {
+    return RCH_RESULT_INVALID_STATE;
+  }
+  sender->test_backend_delay_ms.store(delay_ms, std::memory_order_release);
+  return RCH_RESULT_OK;
+}
+
+}  // namespace robocamhub::testing
+#endif
 
 namespace {
 

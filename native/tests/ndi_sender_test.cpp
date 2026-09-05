@@ -2,7 +2,10 @@
 
 #include <gst/rtsp-server/rtsp-server.h>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -169,6 +172,78 @@ bool WaitForReceiving(rch_engine_handle engine,
   return false;
 }
 
+rch_ndi_sender_status_v1 QuerySenderStatus(rch_ndi_sender_handle sender, bool& ok)
+{
+  rch_ndi_sender_status_v1 status{};
+  status.struct_size = static_cast<std::uint32_t>(sizeof(status));
+  status.struct_version = RCH_NDI_SENDER_STATUS_VERSION;
+  ok = rch_ndi_sender_get_status(sender, &status) == RCH_RESULT_OK;
+  return status;
+}
+
+bool WaitForSenderActivity(rch_ndi_sender_handle sender)
+{
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < deadline) {
+    bool ok = false;
+    const auto status = QuerySenderStatus(sender, ok);
+    if (ok && (status.state == RCH_NDI_SENDER_STATE_RUNNING
+               || status.state == RCH_NDI_SENDER_STATE_WAITING_FOR_VIEW_FRAME)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+bool VerifySenderStatusCanaries(rch_ndi_sender_handle sender)
+{
+  constexpr std::size_t canary_size = 32U;
+  constexpr auto v1_size = offsetof(rch_ndi_sender_status_v1, worker_tick_count);
+
+  struct StatusWithCanary final {
+    rch_ndi_sender_status_v1 status;
+    std::array<std::uint8_t, canary_size> canary;
+  };
+
+  StatusWithCanary v1_storage{};
+  std::memset(&v1_storage, 0xA5, sizeof(v1_storage));
+  v1_storage.status.struct_size = static_cast<std::uint32_t>(sizeof(v1_storage));
+  v1_storage.status.struct_version = RCH_NDI_SENDER_STATUS_VERSION_V1;
+  const auto v1_result = rch_ndi_sender_get_status(sender, &v1_storage.status);
+  const auto* v1_bytes = reinterpret_cast<const std::uint8_t*>(&v1_storage);
+  const bool v1_canary_intact = std::all_of(
+    v1_bytes + v1_size,
+    v1_bytes + sizeof(v1_storage),
+    [](std::uint8_t value) { return value == UINT8_C(0xA5); });
+
+  StatusWithCanary v2_storage{};
+  std::memset(&v2_storage, 0x5A, sizeof(v2_storage));
+  v2_storage.status.struct_size = static_cast<std::uint32_t>(sizeof(v2_storage));
+  v2_storage.status.struct_version = RCH_NDI_SENDER_STATUS_VERSION_V2;
+  const auto v2_result = rch_ndi_sender_get_status(sender, &v2_storage.status);
+  const auto* v2_canary = reinterpret_cast<const std::uint8_t*>(&v2_storage.canary);
+  const bool v2_canary_intact = std::all_of(
+    v2_canary,
+    v2_canary + v2_storage.canary.size(),
+    [](std::uint8_t value) { return value == UINT8_C(0x5A); });
+
+  return Expect(v1_result == RCH_RESULT_OK,
+                "sender status v1 query must accept a larger caller buffer")
+    && Expect(v1_storage.status.struct_size == v1_size
+              && v1_storage.status.struct_version == RCH_NDI_SENDER_STATUS_VERSION_V1,
+              "sender status v1 query must report the v1 prefix size/version")
+    && Expect(v1_canary_intact,
+              "sender status v1 query must not write beyond the v1 prefix")
+    && Expect(v2_result == RCH_RESULT_OK,
+              "sender status v2 query must accept a larger caller buffer")
+    && Expect(v2_storage.status.struct_size == sizeof(rch_ndi_sender_status_v1)
+              && v2_storage.status.struct_version == RCH_NDI_SENDER_STATUS_VERSION_V2,
+              "sender status v2 query must report the v2 size/version")
+    && Expect(v2_canary_intact,
+              "sender status v2 query must not write beyond the v2 structure");
+}
+
 }  // namespace
 
 int main()
@@ -279,6 +354,13 @@ int main()
     return 1;
   }
 
+  if (!VerifySenderStatusCanaries(sender)) {
+    rch_ndi_sender_destroy(sender);
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
   bool observed_sequence = false;
   bool observed_sender_activity = false;
   bool observed_counter_relationships = false;
@@ -350,6 +432,58 @@ int main()
     return 1;
   }
 
+  rch_view_handle destroyed_while_active_view = nullptr;
+  rch_ndi_sender_handle destroyed_while_active_sender = nullptr;
+  if (!Expect(rch_view_create(engine, "destroy-while-sender-active",
+                              &destroyed_while_active_view) == RCH_RESULT_OK,
+              "auxiliary View creation must succeed for active-destroy regression")
+      || !Expect(rch_ndi_sender_create(destroyed_while_active_view,
+                                       "ROBOCAM - Active View Destroy",
+                                       &destroyed_while_active_sender) == RCH_RESULT_OK,
+                 "auxiliary sender creation must succeed for active-destroy regression")
+      || !Expect(rch_ndi_sender_start(destroyed_while_active_sender) == RCH_RESULT_OK,
+                 "auxiliary sender must start before destroying its View")
+      || !Expect(WaitForSenderActivity(destroyed_while_active_sender),
+                 "auxiliary sender must become active before destroying its View")
+      || !Expect(rch_view_destroy(destroyed_while_active_view) == RCH_RESULT_OK,
+                 "destroying a View with an active sender must stop View ownership safely")) {
+    if (destroyed_while_active_sender != nullptr) {
+      rch_ndi_sender_destroy(destroyed_while_active_sender);
+    }
+    rch_ndi_sender_destroy(sender);
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+  bool removed_view_sender_ok = false;
+  const auto removed_view_sender_status =
+    QuerySenderStatus(destroyed_while_active_sender, removed_view_sender_ok);
+  if (!Expect(removed_view_sender_ok,
+              "sender status must remain safely queryable after active View destruction")
+      || !Expect(removed_view_sender_status.state == RCH_NDI_SENDER_STATE_FAILED
+                 && removed_view_sender_status.last_result == RCH_RESULT_INVALID_HANDLE,
+                 "sender must report its destroyed View without using stale ownership")
+      || !Expect(rch_ndi_sender_destroy(destroyed_while_active_sender) == RCH_RESULT_OK,
+                 "sender destroy must join safely after its active View is destroyed")) {
+    rch_ndi_sender_destroy(sender);
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  bool after_active_view_destroy_ok = false;
+  const auto after_active_view_destroy = QueryDiagnostics(engine, after_active_view_destroy_ok);
+  if (!Expect(after_active_view_destroy_ok,
+              "engine diagnostics must survive active View/sender destruction")
+      || !Expect(after_active_view_destroy.active_rtsp_session_total == kCameraCount
+                 && after_active_view_destroy.active_decoder_total == kCameraCount,
+                 "active View/sender destruction must preserve exact 4/4 ingest ownership")) {
+    rch_ndi_sender_destroy(sender);
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
   if (!Expect(rch_ndi_sender_stop(sender) == RCH_RESULT_OK,
               "sender stop must release the worker without disturbing the underlying View")) {
     rch_ndi_sender_destroy(sender);
@@ -404,6 +538,54 @@ int main()
 
   if (!Expect(rch_engine_destroy(engine) == RCH_RESULT_OK,
               "engine destroy must release all native objects cleanly")) {
+    return 1;
+  }
+
+  rch_engine_handle teardown_engine = nullptr;
+  rch_view_handle teardown_view = nullptr;
+  rch_ndi_sender_handle teardown_sender = nullptr;
+  if (!Expect(rch_engine_create(&teardown_engine) == RCH_RESULT_OK,
+              "engine creation must succeed for active-sender engine teardown")
+      || !Expect(rch_view_create(teardown_engine, "engine-teardown-view",
+                                 &teardown_view) == RCH_RESULT_OK,
+                 "View creation must succeed for active-sender engine teardown")
+      || !Expect(rch_ndi_sender_create(teardown_view, "ROBOCAM - Engine Teardown",
+                                       &teardown_sender) == RCH_RESULT_OK,
+                 "sender creation must succeed for active-sender engine teardown")
+      || !Expect(rch_ndi_sender_start(teardown_sender) == RCH_RESULT_OK,
+                 "sender must start before engine teardown")
+      || !Expect(WaitForSenderActivity(teardown_sender),
+                 "sender must become active before engine teardown")) {
+    if (teardown_sender != nullptr) {
+      rch_ndi_sender_destroy(teardown_sender);
+    }
+    if (teardown_view != nullptr) {
+      rch_view_destroy(teardown_view);
+    }
+    if (teardown_engine != nullptr) {
+      rch_engine_destroy(teardown_engine);
+    }
+    return 1;
+  }
+  if (!Expect(rch_engine_destroy(teardown_engine) == RCH_RESULT_OK,
+              "engine teardown must remain safe while a sender is active")) {
+    rch_ndi_sender_destroy(teardown_sender);
+    rch_view_destroy(teardown_view);
+    return 1;
+  }
+
+  bool engine_teardown_sender_ok = false;
+  const auto engine_teardown_sender_status =
+    QuerySenderStatus(teardown_sender, engine_teardown_sender_ok);
+  if (!Expect(engine_teardown_sender_ok,
+              "sender status must remain safely queryable after engine teardown")
+      || !Expect(engine_teardown_sender_status.state == RCH_NDI_SENDER_STATE_FAILED
+                 && engine_teardown_sender_status.last_result == RCH_RESULT_INVALID_HANDLE,
+                 "active sender must observe engine/View teardown deterministically")
+      || !Expect(rch_ndi_sender_destroy(teardown_sender) == RCH_RESULT_OK,
+                 "sender destroy must safely join after engine teardown")
+      || !Expect(rch_view_destroy(teardown_view) == RCH_RESULT_OK,
+                 "View handle cleanup must remain safe after engine teardown")) {
     return 1;
   }
 

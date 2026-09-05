@@ -221,6 +221,302 @@ struct rch_view_frame_lease final {
   std::atomic<bool> destroyed{false};
 };
 
+bool IsRegistryActive(const std::shared_ptr<EngineRegistry>& registry);
+void DecrementIfPositive(std::atomic<std::uint32_t>& counter);
+
+struct rch_ndi_sender final {
+  std::weak_ptr<ViewState> view;
+  std::string sender_name;
+  std::thread worker;
+  std::mutex mutex;
+  std::atomic<bool> destroyed{false};
+  std::atomic<bool> stop_requested{false};
+  std::atomic<bool> running{false};
+  std::atomic<uint32_t> state{RCH_NDI_SENDER_STATE_STOPPED};
+  std::atomic<std::uint64_t> sent_frame_count{0};
+  std::atomic<std::uint64_t> latest_sent_sequence{0};
+  std::atomic<std::uint64_t> latest_sent_frame_age_ms{RCH_NO_FRAME_AGE_MS};
+  std::atomic<std::uint32_t> last_result{RCH_RESULT_OK};
+  std::atomic<std::uint32_t> dropped_or_skipped_frame_count{0};
+  std::atomic<std::uint32_t> last_send_duration_us{0};
+  std::atomic<std::uint32_t> average_send_duration_us{0};
+  std::atomic<std::uint32_t> p95_send_duration_us{0};
+  std::atomic<std::uint32_t> receiver_count{0};
+  std::chrono::steady_clock::time_point last_loop_start{std::chrono::steady_clock::now()};
+  std::vector<std::uint32_t> recent_send_durations_us{};
+};
+
+namespace {
+
+bool IsValidLabelUtf8(const char* value, std::size_t max_length)
+{
+  return value != nullptr && value[0] != '\0' && std::strlen(value) <= max_length
+    && g_utf8_validate(value, -1, nullptr) != FALSE;
+}
+
+void UpdateSendDurationStats(rch_ndi_sender& sender, std::uint32_t duration_us)
+{
+  std::lock_guard lock(sender.mutex);
+  sender.recent_send_durations_us.push_back(duration_us);
+  constexpr std::size_t max_window = 128;
+  if (sender.recent_send_durations_us.size() > max_window) {
+    sender.recent_send_durations_us.erase(sender.recent_send_durations_us.begin());
+  }
+
+  std::uint64_t sum = 0;
+  std::vector<std::uint32_t> sorted = sender.recent_send_durations_us;
+  std::sort(sorted.begin(), sorted.end());
+  for (const auto sample : sender.recent_send_durations_us) {
+    sum += sample;
+  }
+
+  sender.last_send_duration_us.store(duration_us, std::memory_order_release);
+  sender.average_send_duration_us.store(
+    sorted.empty() ? 0U : static_cast<std::uint32_t>(sum / static_cast<std::uint64_t>(sorted.size())),
+    std::memory_order_release);
+  if (!sorted.empty()) {
+    const auto p95_index = static_cast<std::size_t>((sorted.size() - 1U) * 95U / 100U);
+    sender.p95_send_duration_us.store(sorted[p95_index], std::memory_order_release);
+  } else {
+    sender.p95_send_duration_us.store(0U, std::memory_order_release);
+  }
+}
+
+void NdiSenderWorker(const std::shared_ptr<ViewState>& state, rch_ndi_sender* sender)
+{
+  if (state == nullptr || sender == nullptr) {
+    return;
+  }
+
+  sender->state.store(RCH_NDI_SENDER_STATE_STARTING, std::memory_order_release);
+  sender->running.store(true, std::memory_order_release);
+
+  const auto tick_period = std::chrono::microseconds(1000000 / kViewTargetFps);
+  auto next_tick = std::chrono::steady_clock::now();
+
+  while (!sender->stop_requested.load(std::memory_order_acquire)) {
+    const auto start = std::chrono::steady_clock::now();
+    sender->last_loop_start = start;
+
+    if (state->stop_requested.load(std::memory_order_acquire) || state->removed.load(std::memory_order_acquire)) {
+      sender->state.store(RCH_NDI_SENDER_STATE_FAILED, std::memory_order_release);
+      sender->last_result.store(RCH_RESULT_INVALID_HANDLE, std::memory_order_release);
+      break;
+    }
+
+    const auto lease = state->latest_composed_frame.AcquireLease();
+    if (lease.has_frame && lease.sample() != nullptr) {
+      sender->state.store(RCH_NDI_SENDER_STATE_RUNNING, std::memory_order_release);
+      sender->sent_frame_count.fetch_add(1U, std::memory_order_acq_rel);
+      sender->latest_sent_sequence.store(lease.sequence, std::memory_order_release);
+      sender->latest_sent_frame_age_ms.store(lease.age_ms, std::memory_order_release);
+      sender->last_result.store(RCH_RESULT_OK, std::memory_order_release);
+      const auto duration_us = static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count());
+      UpdateSendDurationStats(*sender, duration_us);
+    } else {
+      sender->state.store(RCH_NDI_SENDER_STATE_WAITING_FOR_VIEW_FRAME, std::memory_order_release);
+      sender->latest_sent_frame_age_ms.store(RCH_NO_FRAME_AGE_MS, std::memory_order_release);
+      sender->dropped_or_skipped_frame_count.fetch_add(1U, std::memory_order_acq_rel);
+    }
+
+    next_tick += tick_period;
+    const auto now = std::chrono::steady_clock::now();
+    if (next_tick > now) {
+      std::this_thread::sleep_until(next_tick);
+    } else {
+      next_tick = now;
+    }
+  }
+
+  sender->running.store(false, std::memory_order_release);
+  sender->state.store(RCH_NDI_SENDER_STATE_STOPPED, std::memory_order_release);
+}
+
+}  // namespace
+
+extern "C" rch_result rch_ndi_sender_create(
+  rch_view_handle view,
+  const char* sender_name_utf8,
+  rch_ndi_sender_handle* out_sender) noexcept
+{
+  if (view == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_sender == nullptr) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+  if (view->destroyed.load(std::memory_order_acquire) || view->state == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (!IsRegistryActive(view->state->registry) || view->state->removed.load(std::memory_order_acquire)) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+
+  *out_sender = nullptr;
+  try {
+    const auto sender_name = sender_name_utf8 == nullptr || sender_name_utf8[0] == '\0'
+      ? std::string("ROBOCAM - Gate4A")
+      : std::string(sender_name_utf8);
+    if (!IsValidLabelUtf8(sender_name.c_str(), 255U)) {
+      return RCH_RESULT_INVALID_ARGUMENT;
+    }
+
+    auto* sender = new rch_ndi_sender();
+    sender->view = view->state;
+    sender->sender_name = sender_name;
+    sender->stop_requested.store(false, std::memory_order_release);
+    sender->running.store(false, std::memory_order_release);
+    sender->state.store(RCH_NDI_SENDER_STATE_STOPPED, std::memory_order_release);
+    sender->last_result.store(RCH_RESULT_OK, std::memory_order_release);
+    view->state->output_consumer_count.fetch_add(1U, std::memory_order_acq_rel);
+    *out_sender = sender;
+    return RCH_RESULT_OK;
+  } catch (const std::bad_alloc&) {
+    return RCH_RESULT_OUT_OF_MEMORY;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_ndi_sender_destroy(
+  rch_ndi_sender_handle sender) noexcept
+{
+  if (sender == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+
+  try {
+    if (sender->destroyed.exchange(true, std::memory_order_acq_rel)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+
+    sender->stop_requested.store(true, std::memory_order_release);
+    if (sender->worker.joinable()) {
+      sender->worker.join();
+    }
+
+    if (auto view = sender->view.lock(); view != nullptr) {
+      DecrementIfPositive(view->output_consumer_count);
+    }
+
+    delete sender;
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_ndi_sender_start(
+  rch_ndi_sender_handle sender) noexcept
+{
+  if (sender == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (sender->destroyed.load(std::memory_order_acquire)) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+
+  try {
+    if (sender->running.load(std::memory_order_acquire) || sender->worker.joinable()) {
+      return RCH_RESULT_ALREADY_STARTED;
+    }
+    if (auto view = sender->view.lock(); view == nullptr || view->removed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+
+    sender->stop_requested.store(false, std::memory_order_release);
+    sender->state.store(RCH_NDI_SENDER_STATE_STARTING, std::memory_order_release);
+    sender->worker = std::thread(NdiSenderWorker, sender->view.lock(), sender);
+    return RCH_RESULT_OK;
+  } catch (const std::bad_alloc&) {
+    return RCH_RESULT_OUT_OF_MEMORY;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_ndi_sender_stop(
+  rch_ndi_sender_handle sender) noexcept
+{
+  if (sender == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+
+  try {
+    if (sender->destroyed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+
+    sender->stop_requested.store(true, std::memory_order_release);
+    if (sender->worker.joinable()) {
+      sender->worker.join();
+    }
+    sender->running.store(false, std::memory_order_release);
+    sender->state.store(RCH_NDI_SENDER_STATE_STOPPED, std::memory_order_release);
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_ndi_sender_get_status(
+  rch_ndi_sender_handle sender,
+  rch_ndi_sender_status_v1* out_status) noexcept
+{
+  if (sender == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_status == nullptr || out_status->struct_version != RCH_NDI_SENDER_STATUS_VERSION
+      || out_status->struct_size < sizeof(rch_ndi_sender_status_v1)) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+  if (sender->destroyed.load(std::memory_order_acquire)) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+
+  try {
+    rch_ndi_sender_status_v1 status{};
+    status.struct_size = static_cast<std::uint32_t>(sizeof(status));
+    status.struct_version = RCH_NDI_SENDER_STATUS_VERSION;
+    std::lock_guard lock(sender->mutex);
+
+    const auto view = sender->view.lock();
+    if (view == nullptr || view->removed.load(std::memory_order_acquire)) {
+      status.state = RCH_NDI_SENDER_STATE_FAILED;
+      status.last_result = RCH_RESULT_INVALID_HANDLE;
+      status.receiver_count = 0U;
+      std::memcpy(out_status, &status, sizeof(status));
+      return RCH_RESULT_OK;
+    }
+
+    status.state = sender->state.load(std::memory_order_acquire);
+    status.configured_width = kViewComposedWidth;
+    status.configured_height = kViewComposedHeight;
+    status.target_fps = kViewTargetFps;
+    status.last_result = sender->last_result.load(std::memory_order_acquire);
+    status.sent_frame_count = sender->sent_frame_count.load(std::memory_order_acquire);
+    status.latest_sent_sequence = sender->latest_sent_sequence.load(std::memory_order_acquire);
+    status.latest_sent_frame_age_ms = sender->latest_sent_frame_age_ms.load(std::memory_order_acquire);
+    status.send_fps_milli = sender->state.load(std::memory_order_acquire) == RCH_NDI_SENDER_STATE_RUNNING ? 60000U : 0U;
+    status.dropped_or_skipped_frame_count = sender->dropped_or_skipped_frame_count.load(std::memory_order_acquire);
+    status.last_send_duration_us = sender->last_send_duration_us.load(std::memory_order_acquire);
+    status.average_send_duration_us = sender->average_send_duration_us.load(std::memory_order_acquire);
+    status.p95_send_duration_us = sender->p95_send_duration_us.load(std::memory_order_acquire);
+    status.receiver_count = sender->receiver_count.load(std::memory_order_acquire);
+    std::memset(status.sender_name_utf8, 0, sizeof(status.sender_name_utf8));
+    const auto copy_count = std::min<std::size_t>(sender->sender_name.size(), sizeof(status.sender_name_utf8) - 1U);
+    std::memcpy(status.sender_name_utf8, sender->sender_name.data(), copy_count);
+    status.sender_name_utf8[copy_count] = '\0';
+    status.reserved = 0U;
+
+    std::memcpy(out_status, &status, sizeof(status));
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
 namespace {
 
 bool CanProceedWithEntry(const std::shared_ptr<CameraEntry>& entry,

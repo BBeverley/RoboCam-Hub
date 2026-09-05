@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #define RCH_ABI_VERSION_MAJOR UINT32_C(1)
-#define RCH_ABI_VERSION_MINOR UINT32_C(5)
+#define RCH_ABI_VERSION_MINOR UINT32_C(6)
 #define RCH_ABI_VERSION ((RCH_ABI_VERSION_MAJOR << 16U) | RCH_ABI_VERSION_MINOR)
 
 #define RCH_CAMERA_CONFIG_VERSION UINT32_C(1)
@@ -44,6 +44,8 @@ extern "C" {
 #define RCH_VIEW_SOURCE_STATUS_VERSION RCH_VIEW_SOURCE_STATUS_VERSION_V1
 #define RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1 UINT32_C(1)
 #define RCH_VIEW_FRAME_LEASE_STATUS_VERSION RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1
+#define RCH_NDI_SENDER_STATUS_VERSION_V1 UINT32_C(1)
+#define RCH_NDI_SENDER_STATUS_VERSION RCH_NDI_SENDER_STATUS_VERSION_V1
 #define RCH_VIEW_MAX_SOURCE_SLOTS UINT32_C(16)
 #define RCH_NO_FRAME_AGE_MS UINT64_MAX
 
@@ -249,6 +251,36 @@ typedef struct rch_view_frame_lease_status_v1 {
   uint64_t latest_frame_age_ms;
 } rch_view_frame_lease_status_v1;
 
+typedef uint32_t rch_ndi_sender_state;
+enum rch_ndi_sender_state_code {
+  RCH_NDI_SENDER_STATE_STOPPED = 0,
+  RCH_NDI_SENDER_STATE_STARTING = 1,
+  RCH_NDI_SENDER_STATE_RUNNING = 2,
+  RCH_NDI_SENDER_STATE_WAITING_FOR_VIEW_FRAME = 3,
+  RCH_NDI_SENDER_STATE_FAILED = 4
+};
+
+typedef struct rch_ndi_sender_status_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  uint32_t state;
+  uint32_t configured_width;
+  uint32_t configured_height;
+  uint32_t target_fps;
+  uint32_t last_result;
+  uint64_t sent_frame_count;
+  uint64_t latest_sent_sequence;
+  uint64_t latest_sent_frame_age_ms;
+  uint32_t send_fps_milli;
+  uint64_t dropped_or_skipped_frame_count;
+  uint32_t last_send_duration_us;
+  uint32_t average_send_duration_us;
+  uint32_t p95_send_duration_us;
+  uint32_t receiver_count;
+  char sender_name_utf8[256];
+  uint32_t reserved;
+} rch_ndi_sender_status_v1;
+
 /* Opaque, native-owned handle. Create it with rch_engine_create and release it
  * exactly once with rch_engine_destroy. */
 typedef struct rch_engine* rch_engine_handle;
@@ -256,6 +288,7 @@ typedef struct rch_frame_consumer* rch_frame_consumer_handle;
 typedef struct rch_frame_lease* rch_frame_lease_handle;
 typedef struct rch_view* rch_view_handle;
 typedef struct rch_view_frame_lease* rch_view_frame_lease_handle;
+typedef struct rch_ndi_sender* rch_ndi_sender_handle;
 
 RCH_API uint32_t rch_get_abi_version(void) RCH_NOEXCEPT;
 
@@ -430,6 +463,31 @@ RCH_API rch_result rch_view_frame_lease_sample_rgba(
 /* Releases a composed-frame lease handle. */
 RCH_API rch_result rch_view_frame_lease_destroy(
   rch_view_frame_lease_handle lease) RCH_NOEXCEPT;
+
+/* Creates a bounded native sender attached to an existing View's latest composed
+ * frame. The sender never creates another RTSP or decode pipeline; it is a
+ * direct output adapter for the existing native View output. */
+RCH_API rch_result rch_ndi_sender_create(
+  rch_view_handle view,
+  const char* sender_name_utf8,
+  rch_ndi_sender_handle* out_sender) RCH_NOEXCEPT;
+
+/* Releases a sender handle and stops its worker thread. */
+RCH_API rch_result rch_ndi_sender_destroy(
+  rch_ndi_sender_handle sender) RCH_NOEXCEPT;
+
+/* Starts the sender worker. */
+RCH_API rch_result rch_ndi_sender_start(
+  rch_ndi_sender_handle sender) RCH_NOEXCEPT;
+
+/* Stops the sender worker and waits for deterministic shutdown. */
+RCH_API rch_result rch_ndi_sender_stop(
+  rch_ndi_sender_handle sender) RCH_NOEXCEPT;
+
+/* Returns a low-frequency status snapshot for the sender. */
+RCH_API rch_result rch_ndi_sender_get_status(
+  rch_ndi_sender_handle sender,
+  rch_ndi_sender_status_v1* out_status) RCH_NOEXCEPT;
 
 #if defined(__cplusplus)
 }

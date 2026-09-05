@@ -99,6 +99,15 @@ rch_enable_sanitizers(robocamhub_compositor_2x2_tests)
 add_test(NAME robocamhub_native.compositor_2x2 COMMAND robocamhub_compositor_2x2_tests)
 set_tests_properties(robocamhub_native.compositor_2x2 PROPERTIES TIMEOUT 90)
 
+add_executable(robocamhub_ndi_sender_tests ndi_sender_test.cpp)
+target_compile_features(robocamhub_ndi_sender_tests PRIVATE cxx_std_20)
+target_link_libraries(robocamhub_ndi_sender_tests PRIVATE robocamhub_native Threads::Threads)
+set_target_properties(robocamhub_ndi_sender_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_ndi_sender_tests)
+rch_enable_sanitizers(robocamhub_ndi_sender_tests)
+add_test(NAME robocamhub_native.ndi_sender COMMAND robocamhub_ndi_sender_tests)
+set_tests_properties(robocamhub_native.ndi_sender PROPERTIES TIMEOUT 30)
+
 # Compile the actual ingest implementation separately so deterministic scheduling
 # hooks and private test access never enter the shared library or exported ABI.
 add_executable(robocamhub_ingest_regression_tests

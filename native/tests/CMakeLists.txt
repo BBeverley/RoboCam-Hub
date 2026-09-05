@@ -110,14 +110,18 @@ set_tests_properties(robocamhub_native.ndi_sender PROPERTIES TIMEOUT 30)
 
 # Compile the native engine into a test-only executable so deterministic backend
 # latency can be injected without exporting a test hook from the shared-library ABI.
+# The full engine also references preview creation, so link the private fake presenter
+# and select its synthetic NSView platform value on every headless test host.
 add_executable(robocamhub_ndi_sender_slow_backend_tests
   ndi_sender_slow_backend_test.cpp
+  preview_test_platform_stub.cpp
   ../src/engine/robocamhub_native.cpp
   ../src/ingest/single_camera_ingest.cpp
   ../src/frames/latest_frame.cpp
 )
 target_compile_definitions(robocamhub_ndi_sender_slow_backend_tests PRIVATE
   RCH_NDI_SENDER_TESTING
+  RCH_PLATFORM_MACOS=1
   ROBOCAMHUB_NATIVE_BUILD
 )
 target_compile_features(robocamhub_ndi_sender_slow_backend_tests PRIVATE cxx_std_20)

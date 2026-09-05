@@ -31,7 +31,7 @@ ATOM EnsureWindowClass()
     window_class.style = CS_HREDRAW | CS_VREDRAW;
     window_class.lpfnWndProc = PreviewWindowProcedure;
     window_class.hInstance = GetModuleHandleW(nullptr);
-    window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(OCR_NORMAL));
     window_class.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     window_class.lpszClassName = kPreviewWindowClass;
     atom = RegisterClassExW(&window_class);

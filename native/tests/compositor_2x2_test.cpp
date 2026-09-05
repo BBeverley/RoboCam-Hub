@@ -163,6 +163,32 @@ rch_view_status_v1 QueryViewStatus(rch_view_handle view, bool& ok)
   return status;
 }
 
+bool ValidateViewStatusVersionCompatibility(rch_view_handle view,
+                                          uint32_t version,
+                                          uint32_t expected_size,
+                                          const char* label)
+{
+  alignas(rch_view_status_v1) std::uint8_t canary_buffer[sizeof(rch_view_status_v1) + 32];
+  std::memset(canary_buffer, 0xA5, sizeof(canary_buffer));
+  auto* status = reinterpret_cast<rch_view_status_v1*>(canary_buffer);
+  status->struct_size = expected_size;
+  status->struct_version = version;
+
+  const auto ok = rch_view_get_status(view, status) == RCH_RESULT_OK;
+  if (!ok || status->struct_size != expected_size || status->struct_version != version) {
+    return false;
+  }
+
+  for (std::size_t i = expected_size; i < sizeof(canary_buffer); ++i) {
+    if (canary_buffer[i] != static_cast<std::uint8_t>(0xA5)) {
+      std::cerr << "FAILED: " << label << " canary bytes were overwritten\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
 rch_view_frame_lease_status_v1 QueryViewLeaseStatus(rch_view_frame_lease_handle lease, bool& ok)
 {
   rch_view_frame_lease_status_v1 status{};
@@ -358,12 +384,12 @@ int main()
     }
   }
 
-  rch_view_source_status_v1 slot_status{};
-  slot_status.struct_size = sizeof(slot_status);
-  slot_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
-  if (!Expect(rch_view_get_source_status(view, 0, &slot_status) == RCH_RESULT_OK,
+  rch_view_source_status_v1 live_slot_status{};
+  live_slot_status.struct_size = sizeof(live_slot_status);
+  live_slot_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+  if (!Expect(rch_view_get_source_status(view, 0, &live_slot_status) == RCH_RESULT_OK,
               "source-slot status query must succeed")
-      || !Expect(slot_status.source_state == RCH_VIEW_SOURCE_STATE_LIVE,
+      || !Expect(live_slot_status.source_state == RCH_VIEW_SOURCE_STATE_LIVE,
                  "live source slot must report Live state")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
@@ -455,6 +481,22 @@ int main()
     return 1;
   }
 
+  rch_view_source_status_v1 outage_slot_status{};
+  outage_slot_status.struct_size = sizeof(outage_slot_status);
+  outage_slot_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+  if (!Expect(rch_view_get_source_status(view, 1, &outage_slot_status) == RCH_RESULT_OK,
+              "source-slot status query must remain valid during outage")
+      || !Expect(outage_slot_status.camera_state == RCH_CAMERA_STATE_WAITING_TO_RETRY
+                   || outage_slot_status.camera_state == RCH_CAMERA_STATE_STARTING
+                   || outage_slot_status.camera_state == RCH_CAMERA_STATE_FAILED,
+                 "underlying camera must remain in reconnect lifecycle while outage is active")
+      || !Expect(outage_slot_status.source_state == RCH_VIEW_SOURCE_STATE_FROZEN_LAST_GOOD,
+                 "prior live frame must render as frozen last-good while reconnecting source is still cached")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
   if (!Expect(fixtures[1].Start("green", 30), "fixture restart must succeed")
       || !Expect(WaitForReceiving(engine, camera_ids[1], std::chrono::seconds(8)),
                  "camera must recover after fixture restart")
@@ -503,6 +545,21 @@ int main()
       || !Expect(diagnostics.configured_camera_count == 4, "re-add must keep configured camera count at 4")
       || !Expect(diagnostics.active_rtsp_session_total == 4, "re-add/rebind must keep RTSP total at 4")
       || !Expect(diagnostics.active_decoder_total == 4, "re-add/rebind must keep decoder total at 4")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  if (!Expect(ValidateViewStatusVersionCompatibility(view,
+                                                    RCH_VIEW_STATUS_VERSION_V1,
+                                                    static_cast<uint32_t>(offsetof(rch_view_status_v1, render_state)),
+                                                    "view status v1 caller compatibility"),
+              "v1 view status caller must remain compatible")
+      || !Expect(ValidateViewStatusVersionCompatibility(view,
+                                                      RCH_VIEW_STATUS_VERSION_V2,
+                                                      static_cast<uint32_t>(offsetof(rch_view_status_v1, live_source_count)),
+                                                      "view status v2 caller compatibility"),
+                 "v2 view status caller must remain compatible")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;

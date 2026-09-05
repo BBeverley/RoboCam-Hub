@@ -1596,9 +1596,10 @@ extern "C" rch_result rch_view_get_status(
       status.last_render_deadline_miss_sequence = view->state->stats.last_render_deadline_miss_sequence;
     }
 
-    const std::size_t bytes_to_copy = std::min<std::size_t>(
-      static_cast<std::size_t>(out_status->struct_size),
-      sizeof(status));
+    const std::size_t bytes_to_copy = view_status_v3_ok
+      ? sizeof(rch_view_status_v1)
+      : (view_status_v2_ok ? static_cast<std::size_t>(view_status_v2_size)
+                          : static_cast<std::size_t>(view_status_v1_size));
     std::memcpy(out_status, &status, bytes_to_copy);
     return RCH_RESULT_OK;
   } catch (...) {

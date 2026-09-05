@@ -213,7 +213,7 @@ typedef struct rch_view_status_v1 {
   uint32_t waiting_for_first_frame_count;
   uint32_t frozen_source_count;
   uint32_t reconnecting_source_count;
-  uint32_t render_deadline_miss_count;
+  uint64_t render_deadline_miss_count;
   uint32_t reserved_v3;
   uint64_t last_render_deadline_miss_us;
   uint64_t last_render_deadline_miss_sequence;

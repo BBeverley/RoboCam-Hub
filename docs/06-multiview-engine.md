@@ -90,14 +90,19 @@ Formal source-state semantics for the native View/source diagnostics API:
    showing the last-good still while the camera is unavailable or has not
    resumed;
 - `Reconnecting` — the source is bound to a logical camera that is actively
-   retrying or restarting after an outage;
+   retrying or restarting after an outage, but there is no usable freeze cache to
+   render;
 - `MissingOrStale` — the source binding exists but the camera is removed,
    destroyed, or otherwise no longer valid for the slot.
 
-These states are low-frequency status values exposed through the native ABI,
-not pixel ownership transfers. The render loop may also publish aggregate view
-health counters such as live/waiting/frozen/reconnecting totals and
-render-deadline miss counts for the last tick and cumulative lifetime.
+These states describe the currently rendered source condition, not the
+underlying camera lifecycle. A previously-live slot may therefore report
+`FrozenLastGood` while the underlying camera is already in a reconnecting state,
+which is available separately through `camera_state`. `Reconnecting` is used only
+when the slot has no valid last-good frame to continue rendering. The render loop
+may also publish aggregate view health counters such as live/waiting/frozen/
+reconnecting totals and render-deadline miss counts for the last tick and
+cumulative lifetime.
 
 Implementation note:
 

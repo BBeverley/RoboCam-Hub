@@ -281,6 +281,8 @@ int main()
 
   bool observed_sequence = false;
   bool observed_sender_activity = false;
+  bool observed_counter_relationships = false;
+  bool observed_receiver_unknown = false;
   for (int iteration = 0; iteration < 100; ++iteration) {
     bool view_ok = false;
     const auto view_status = QueryViewStatus(view, view_ok);
@@ -296,8 +298,21 @@ int main()
         || sender_status.state == RCH_NDI_SENDER_STATE_WAITING_FOR_VIEW_FRAME)) {
       observed_sender_activity = true;
     }
+    if (sender_result == RCH_RESULT_OK
+        && sender_status.worker_tick_count >= sender_status.unique_sequence_observed_count
+        && sender_status.unique_sequence_observed_count >= sender_status.sent_frame_count) {
+      observed_counter_relationships = true;
+    }
+    if (sender_result == RCH_RESULT_OK
+        && sender_status.receiver_count_known == 0U
+        && sender_status.receiver_count == 0U) {
+      observed_receiver_unknown = true;
+    }
 
-    if (observed_sequence && observed_sender_activity) {
+    if (observed_sequence
+        && observed_sender_activity
+        && observed_counter_relationships
+        && observed_receiver_unknown) {
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(15));
@@ -306,7 +321,11 @@ int main()
   if (!Expect(observed_sequence,
               "View sequence must advance while sender is active")
       || !Expect(observed_sender_activity,
-                 "sender status must observe sending or waiting-for-frame while active")) {
+       "sender status must observe sending or waiting-for-frame while active")
+        || !Expect(observed_counter_relationships,
+       "worker tick and unique sequence counters must stay internally consistent")
+        || !Expect(observed_receiver_unknown,
+       "deterministic sender backend must not claim a receiver count")) {
     rch_ndi_sender_stop(sender);
     rch_ndi_sender_destroy(sender);
     rch_view_destroy(view);

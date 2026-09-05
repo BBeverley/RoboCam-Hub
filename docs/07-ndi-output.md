@@ -186,6 +186,8 @@ The official NDI SDK is not bundled in this repository and must not be committed
 
 Local validation continues only after the official SDK is installed on the host. Until that installation is present, the code path remains deterministic native proof only and must not be reported as live NDI sender interoperability.
 
+When the SDK is not discovered, the native sender runs in deterministic sender-core/backend proof mode. This mode validates lifecycle, ownership, latest-frame handoff, and bounded newest-wins behavior; it does not claim real NDI publish/discovery success.
+
 ## View resolution vs output resolution
 
 A View and an NDI Output are independent.

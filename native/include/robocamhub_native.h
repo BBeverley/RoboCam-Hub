@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #define RCH_ABI_VERSION_MAJOR UINT32_C(1)
-#define RCH_ABI_VERSION_MINOR UINT32_C(6)
+#define RCH_ABI_VERSION_MINOR UINT32_C(7)
 #define RCH_ABI_VERSION ((RCH_ABI_VERSION_MAJOR << 16U) | RCH_ABI_VERSION_MINOR)
 
 #define RCH_CAMERA_CONFIG_VERSION UINT32_C(1)
@@ -45,7 +45,8 @@ extern "C" {
 #define RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1 UINT32_C(1)
 #define RCH_VIEW_FRAME_LEASE_STATUS_VERSION RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1
 #define RCH_NDI_SENDER_STATUS_VERSION_V1 UINT32_C(1)
-#define RCH_NDI_SENDER_STATUS_VERSION RCH_NDI_SENDER_STATUS_VERSION_V1
+#define RCH_NDI_SENDER_STATUS_VERSION_V2 UINT32_C(2)
+#define RCH_NDI_SENDER_STATUS_VERSION RCH_NDI_SENDER_STATUS_VERSION_V2
 #define RCH_VIEW_MAX_SOURCE_SLOTS UINT32_C(16)
 #define RCH_NO_FRAME_AGE_MS UINT64_MAX
 
@@ -279,6 +280,11 @@ typedef struct rch_ndi_sender_status_v1 {
   uint32_t receiver_count;
   char sender_name_utf8[256];
   uint32_t reserved;
+  uint64_t worker_tick_count;
+  uint64_t unique_sequence_observed_count;
+  uint64_t duplicate_sequence_tick_count;
+  uint32_t receiver_count_known;
+  uint32_t reserved_v2;
 } rch_ndi_sender_status_v1;
 
 /* Opaque, native-owned handle. Create it with rch_engine_create and release it

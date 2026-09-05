@@ -11,6 +11,8 @@ include(CTest)
 
 option(RCH_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(RCH_BUILD_INGEST_PROBE "Build the manual single-camera diagnostics probe" ON)
+option(RCH_ENABLE_NDI_SDK "Enable official NDI SDK backend when discoverable" ON)
+set(RCH_NDI_SDK_ROOT "" CACHE PATH "Root folder of an installed official NDI SDK")
 
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
@@ -65,6 +67,44 @@ target_include_directories(robocamhub_native
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 target_link_libraries(robocamhub_native PRIVATE PkgConfig::GSTREAMER Threads::Threads)
+
+set(RCH_HAS_NDI_SDK OFF)
+if(RCH_ENABLE_NDI_SDK)
+  set(_rch_ndi_hints)
+  if(RCH_NDI_SDK_ROOT)
+    list(APPEND _rch_ndi_hints "${RCH_NDI_SDK_ROOT}")
+  endif()
+  if(DEFINED ENV{NDI_SDK_ROOT})
+    list(APPEND _rch_ndi_hints "$ENV{NDI_SDK_ROOT}")
+  endif()
+  if(DEFINED ENV{NDI_INSTALL_DIR})
+    list(APPEND _rch_ndi_hints "$ENV{NDI_INSTALL_DIR}")
+  endif()
+
+  find_path(
+    RCH_NDI_SDK_INCLUDE_DIR
+    NAMES Processing.NDI.Lib.h
+    HINTS ${_rch_ndi_hints}
+    PATH_SUFFIXES Include include
+  )
+  find_library(
+    RCH_NDI_SDK_LIBRARY
+    NAMES NDIlib_v6 NDIlib_v5 ndi
+    HINTS ${_rch_ndi_hints}
+    PATH_SUFFIXES Lib lib Bin bin
+  )
+
+  if(RCH_NDI_SDK_INCLUDE_DIR AND RCH_NDI_SDK_LIBRARY)
+    set(RCH_HAS_NDI_SDK ON)
+    target_compile_definitions(robocamhub_native PRIVATE RCH_HAS_NDI_SDK=1)
+    target_include_directories(robocamhub_native PRIVATE "${RCH_NDI_SDK_INCLUDE_DIR}")
+    target_link_libraries(robocamhub_native PRIVATE "${RCH_NDI_SDK_LIBRARY}")
+    message(STATUS "Official NDI SDK detected: ${RCH_NDI_SDK_INCLUDE_DIR}")
+  else()
+    message(STATUS "Official NDI SDK not found. Deterministic sender-core backend remains active.")
+    message(STATUS "Set RCH_NDI_SDK_ROOT (or env NDI_SDK_ROOT / NDI_INSTALL_DIR) to an installed SDK root containing Processing.NDI.Lib.h and NDI library binaries.")
+  endif()
+endif()
 
 set_target_properties(robocamhub_native PROPERTIES
   CXX_EXTENSIONS OFF

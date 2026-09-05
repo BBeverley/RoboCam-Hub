@@ -224,6 +224,20 @@ struct rch_view_frame_lease final {
 bool IsRegistryActive(const std::shared_ptr<EngineRegistry>& registry);
 void DecrementIfPositive(std::atomic<std::uint32_t>& counter);
 
+struct SenderBackendSendResult final {
+  bool accepted{false};
+  std::uint32_t result{RCH_RESULT_INTERNAL_ERROR};
+  bool receiver_count_known{false};
+  std::uint32_t receiver_count{0};
+};
+
+using SenderBackendSendFn = SenderBackendSendResult (*)(const robocamhub::frames::LatestFrameLease& lease);
+
+struct SenderBackendDispatch final {
+  SenderBackendSendFn send{nullptr};
+  bool is_official_sdk{false};
+};
+
 struct rch_ndi_sender final {
   std::weak_ptr<ViewState> view;
   std::string sender_name;
@@ -237,13 +251,22 @@ struct rch_ndi_sender final {
   std::atomic<std::uint64_t> latest_sent_sequence{0};
   std::atomic<std::uint64_t> latest_sent_frame_age_ms{RCH_NO_FRAME_AGE_MS};
   std::atomic<std::uint32_t> last_result{RCH_RESULT_OK};
-  std::atomic<std::uint32_t> dropped_or_skipped_frame_count{0};
+  std::atomic<std::uint64_t> dropped_or_skipped_frame_count{0};
   std::atomic<std::uint32_t> last_send_duration_us{0};
   std::atomic<std::uint32_t> average_send_duration_us{0};
   std::atomic<std::uint32_t> p95_send_duration_us{0};
+  std::atomic<std::uint32_t> send_fps_milli{0};
   std::atomic<std::uint32_t> receiver_count{0};
+  std::atomic<std::uint32_t> receiver_count_known{0};
+  std::atomic<std::uint64_t> worker_tick_count{0};
+  std::atomic<std::uint64_t> unique_sequence_observed_count{0};
+  std::atomic<std::uint64_t> duplicate_sequence_tick_count{0};
+  std::atomic<std::uint64_t> latest_observed_sequence{0};
+  std::atomic<bool> has_observed_sequence{false};
   std::chrono::steady_clock::time_point last_loop_start{std::chrono::steady_clock::now()};
   std::vector<std::uint32_t> recent_send_durations_us{};
+  std::deque<std::chrono::steady_clock::time_point> accepted_send_times{};
+  SenderBackendDispatch backend{};
 };
 
 namespace {
@@ -252,6 +275,50 @@ bool IsValidLabelUtf8(const char* value, std::size_t max_length)
 {
   return value != nullptr && value[0] != '\0' && std::strlen(value) <= max_length
     && g_utf8_validate(value, -1, nullptr) != FALSE;
+}
+
+SenderBackendSendResult DeterministicSenderBackendSend(const robocamhub::frames::LatestFrameLease& lease)
+{
+  SenderBackendSendResult result{};
+  if (!lease.has_frame || lease.sample() == nullptr) {
+    result.accepted = false;
+    result.result = RCH_RESULT_INVALID_ARGUMENT;
+    return result;
+  }
+
+  result.accepted = true;
+  result.result = RCH_RESULT_OK;
+  result.receiver_count_known = false;
+  result.receiver_count = 0U;
+  return result;
+}
+
+void UpdateAcceptedSendRate(rch_ndi_sender& sender, std::chrono::steady_clock::time_point now)
+{
+  std::lock_guard lock(sender.mutex);
+  sender.accepted_send_times.push_back(now);
+  constexpr auto window = std::chrono::seconds(2);
+  const auto floor = now - window;
+  while (!sender.accepted_send_times.empty() && sender.accepted_send_times.front() < floor) {
+    sender.accepted_send_times.pop_front();
+  }
+
+  if (sender.accepted_send_times.size() < 2U) {
+    sender.send_fps_milli.store(0U, std::memory_order_release);
+    return;
+  }
+
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+    sender.accepted_send_times.back() - sender.accepted_send_times.front()).count();
+  if (elapsed < 500) {
+    sender.send_fps_milli.store(0U, std::memory_order_release);
+    return;
+  }
+
+  const auto sample_count = static_cast<std::uint64_t>(sender.accepted_send_times.size());
+  const auto fps_milli = static_cast<std::uint32_t>((sample_count * 1000000ULL)
+                                                    / static_cast<std::uint64_t>(elapsed));
+  sender.send_fps_milli.store(fps_milli, std::memory_order_release);
 }
 
 void UpdateSendDurationStats(rch_ndi_sender& sender, std::uint32_t duration_us)
@@ -297,6 +364,7 @@ void NdiSenderWorker(const std::shared_ptr<ViewState>& state, rch_ndi_sender* se
   while (!sender->stop_requested.load(std::memory_order_acquire)) {
     const auto start = std::chrono::steady_clock::now();
     sender->last_loop_start = start;
+    sender->worker_tick_count.fetch_add(1U, std::memory_order_acq_rel);
 
     if (state->stop_requested.load(std::memory_order_acquire) || state->removed.load(std::memory_order_acquire)) {
       sender->state.store(RCH_NDI_SENDER_STATE_FAILED, std::memory_order_release);
@@ -305,19 +373,67 @@ void NdiSenderWorker(const std::shared_ptr<ViewState>& state, rch_ndi_sender* se
     }
 
     const auto lease = state->latest_composed_frame.AcquireLease();
-    if (lease.has_frame && lease.sample() != nullptr) {
-      sender->state.store(RCH_NDI_SENDER_STATE_RUNNING, std::memory_order_release);
-      sender->sent_frame_count.fetch_add(1U, std::memory_order_acq_rel);
-      sender->latest_sent_sequence.store(lease.sequence, std::memory_order_release);
-      sender->latest_sent_frame_age_ms.store(lease.age_ms, std::memory_order_release);
-      sender->last_result.store(RCH_RESULT_OK, std::memory_order_release);
-      const auto duration_us = static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now() - start).count());
-      UpdateSendDurationStats(*sender, duration_us);
-    } else {
+    if (!lease.has_frame || lease.sample() == nullptr) {
       sender->state.store(RCH_NDI_SENDER_STATE_WAITING_FOR_VIEW_FRAME, std::memory_order_release);
       sender->latest_sent_frame_age_ms.store(RCH_NO_FRAME_AGE_MS, std::memory_order_release);
       sender->dropped_or_skipped_frame_count.fetch_add(1U, std::memory_order_acq_rel);
+      sender->last_result.store(RCH_RESULT_OK, std::memory_order_release);
+      next_tick += tick_period;
+      const auto now = std::chrono::steady_clock::now();
+      if (next_tick > now) {
+        std::this_thread::sleep_until(next_tick);
+      } else {
+        next_tick = now;
+      }
+      continue;
+    }
+
+    sender->state.store(RCH_NDI_SENDER_STATE_RUNNING, std::memory_order_release);
+    const bool has_observed_sequence = sender->has_observed_sequence.load(std::memory_order_acquire);
+    const auto previous_sequence = sender->latest_observed_sequence.load(std::memory_order_acquire);
+    if (has_observed_sequence && lease.sequence <= previous_sequence) {
+      sender->duplicate_sequence_tick_count.fetch_add(1U, std::memory_order_acq_rel);
+      sender->dropped_or_skipped_frame_count.fetch_add(1U, std::memory_order_acq_rel);
+      sender->last_result.store(RCH_RESULT_OK, std::memory_order_release);
+      next_tick += tick_period;
+      const auto now = std::chrono::steady_clock::now();
+      if (next_tick > now) {
+        std::this_thread::sleep_until(next_tick);
+      } else {
+        next_tick = now;
+      }
+      continue;
+    }
+
+    if (has_observed_sequence && lease.sequence > previous_sequence + 1U) {
+      sender->dropped_or_skipped_frame_count.fetch_add(
+        lease.sequence - previous_sequence - 1U,
+        std::memory_order_acq_rel);
+    }
+    sender->latest_observed_sequence.store(lease.sequence, std::memory_order_release);
+    sender->has_observed_sequence.store(true, std::memory_order_release);
+    sender->unique_sequence_observed_count.fetch_add(1U, std::memory_order_acq_rel);
+
+    const auto backend_send = sender->backend.send == nullptr
+      ? SenderBackendSendResult{}
+      : sender->backend.send(lease);
+    sender->last_result.store(backend_send.result, std::memory_order_release);
+    if (!backend_send.accepted || backend_send.result != RCH_RESULT_OK) {
+      sender->dropped_or_skipped_frame_count.fetch_add(1U, std::memory_order_acq_rel);
+      sender->state.store(RCH_NDI_SENDER_STATE_FAILED, std::memory_order_release);
+      sender->latest_sent_frame_age_ms.store(RCH_NO_FRAME_AGE_MS, std::memory_order_release);
+    } else {
+      sender->sent_frame_count.fetch_add(1U, std::memory_order_acq_rel);
+      sender->latest_sent_sequence.store(lease.sequence, std::memory_order_release);
+      sender->latest_sent_frame_age_ms.store(lease.age_ms, std::memory_order_release);
+      sender->receiver_count_known.store(backend_send.receiver_count_known ? 1U : 0U, std::memory_order_release);
+      sender->receiver_count.store(
+        backend_send.receiver_count_known ? backend_send.receiver_count : 0U,
+        std::memory_order_release);
+      const auto duration_us = static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count());
+      UpdateSendDurationStats(*sender, duration_us);
+      UpdateAcceptedSendRate(*sender, std::chrono::steady_clock::now());
     }
 
     next_tick += tick_period;
@@ -369,6 +485,8 @@ extern "C" rch_result rch_ndi_sender_create(
     sender->running.store(false, std::memory_order_release);
     sender->state.store(RCH_NDI_SENDER_STATE_STOPPED, std::memory_order_release);
     sender->last_result.store(RCH_RESULT_OK, std::memory_order_release);
+    sender->backend.send = DeterministicSenderBackendSend;
+    sender->backend.is_official_sdk = false;
     view->state->output_consumer_count.fetch_add(1U, std::memory_order_acq_rel);
     *out_sender = sender;
     return RCH_RESULT_OK;
@@ -426,6 +544,23 @@ extern "C" rch_result rch_ndi_sender_start(
     }
 
     sender->stop_requested.store(false, std::memory_order_release);
+    {
+      std::lock_guard lock(sender->mutex);
+      sender->accepted_send_times.clear();
+    }
+    sender->send_fps_milli.store(0U, std::memory_order_release);
+    sender->worker_tick_count.store(0U, std::memory_order_release);
+    sender->unique_sequence_observed_count.store(0U, std::memory_order_release);
+    sender->duplicate_sequence_tick_count.store(0U, std::memory_order_release);
+    sender->latest_observed_sequence.store(0U, std::memory_order_release);
+    sender->has_observed_sequence.store(false, std::memory_order_release);
+    sender->dropped_or_skipped_frame_count.store(0U, std::memory_order_release);
+    sender->sent_frame_count.store(0U, std::memory_order_release);
+    sender->latest_sent_sequence.store(0U, std::memory_order_release);
+    sender->latest_sent_frame_age_ms.store(RCH_NO_FRAME_AGE_MS, std::memory_order_release);
+    sender->receiver_count.store(0U, std::memory_order_release);
+    sender->receiver_count_known.store(0U, std::memory_order_release);
+    sender->last_result.store(RCH_RESULT_OK, std::memory_order_release);
     sender->state.store(RCH_NDI_SENDER_STATE_STARTING, std::memory_order_release);
     sender->worker = std::thread(NdiSenderWorker, sender->view.lock(), sender);
     return RCH_RESULT_OK;
@@ -467,8 +602,17 @@ extern "C" rch_result rch_ndi_sender_get_status(
   if (sender == nullptr) {
     return RCH_RESULT_INVALID_HANDLE;
   }
-  if (out_status == nullptr || out_status->struct_version != RCH_NDI_SENDER_STATUS_VERSION
-      || out_status->struct_size < sizeof(rch_ndi_sender_status_v1)) {
+  constexpr std::uint32_t sender_status_v1_size =
+    static_cast<std::uint32_t>(offsetof(rch_ndi_sender_status_v1, worker_tick_count));
+  const bool sender_status_v1_ok =
+    out_status != nullptr
+    && out_status->struct_version == RCH_NDI_SENDER_STATUS_VERSION_V1
+    && out_status->struct_size >= sender_status_v1_size;
+  const bool sender_status_v2_ok =
+    out_status != nullptr
+    && out_status->struct_version == RCH_NDI_SENDER_STATUS_VERSION_V2
+    && out_status->struct_size >= sizeof(rch_ndi_sender_status_v1);
+  if (!sender_status_v1_ok && !sender_status_v2_ok) {
     return RCH_RESULT_INVALID_ARGUMENT;
   }
   if (sender->destroyed.load(std::memory_order_acquire)) {
@@ -477,16 +621,24 @@ extern "C" rch_result rch_ndi_sender_get_status(
 
   try {
     rch_ndi_sender_status_v1 status{};
-    status.struct_size = static_cast<std::uint32_t>(sizeof(status));
-    status.struct_version = RCH_NDI_SENDER_STATUS_VERSION;
+    status.struct_size = sender_status_v2_ok
+      ? static_cast<std::uint32_t>(sizeof(status))
+      : sender_status_v1_size;
+    status.struct_version = sender_status_v2_ok
+      ? RCH_NDI_SENDER_STATUS_VERSION_V2
+      : RCH_NDI_SENDER_STATUS_VERSION_V1;
     std::lock_guard lock(sender->mutex);
 
     const auto view = sender->view.lock();
     if (view == nullptr || view->removed.load(std::memory_order_acquire)) {
       status.state = RCH_NDI_SENDER_STATE_FAILED;
       status.last_result = RCH_RESULT_INVALID_HANDLE;
+      status.receiver_count_known = 0U;
       status.receiver_count = 0U;
-      std::memcpy(out_status, &status, sizeof(status));
+      const std::size_t bytes_to_copy = sender_status_v2_ok
+        ? sizeof(status)
+        : static_cast<std::size_t>(sender_status_v1_size);
+      std::memcpy(out_status, &status, bytes_to_copy);
       return RCH_RESULT_OK;
     }
 
@@ -498,19 +650,29 @@ extern "C" rch_result rch_ndi_sender_get_status(
     status.sent_frame_count = sender->sent_frame_count.load(std::memory_order_acquire);
     status.latest_sent_sequence = sender->latest_sent_sequence.load(std::memory_order_acquire);
     status.latest_sent_frame_age_ms = sender->latest_sent_frame_age_ms.load(std::memory_order_acquire);
-    status.send_fps_milli = sender->state.load(std::memory_order_acquire) == RCH_NDI_SENDER_STATE_RUNNING ? 60000U : 0U;
+    status.send_fps_milli = sender->send_fps_milli.load(std::memory_order_acquire);
     status.dropped_or_skipped_frame_count = sender->dropped_or_skipped_frame_count.load(std::memory_order_acquire);
     status.last_send_duration_us = sender->last_send_duration_us.load(std::memory_order_acquire);
     status.average_send_duration_us = sender->average_send_duration_us.load(std::memory_order_acquire);
     status.p95_send_duration_us = sender->p95_send_duration_us.load(std::memory_order_acquire);
-    status.receiver_count = sender->receiver_count.load(std::memory_order_acquire);
+    status.receiver_count_known = sender->receiver_count_known.load(std::memory_order_acquire);
+    status.receiver_count = status.receiver_count_known != 0U
+      ? sender->receiver_count.load(std::memory_order_acquire)
+      : 0U;
     std::memset(status.sender_name_utf8, 0, sizeof(status.sender_name_utf8));
     const auto copy_count = std::min<std::size_t>(sender->sender_name.size(), sizeof(status.sender_name_utf8) - 1U);
     std::memcpy(status.sender_name_utf8, sender->sender_name.data(), copy_count);
     status.sender_name_utf8[copy_count] = '\0';
     status.reserved = 0U;
+    status.worker_tick_count = sender->worker_tick_count.load(std::memory_order_acquire);
+    status.unique_sequence_observed_count = sender->unique_sequence_observed_count.load(std::memory_order_acquire);
+    status.duplicate_sequence_tick_count = sender->duplicate_sequence_tick_count.load(std::memory_order_acquire);
+    status.reserved_v2 = sender->backend.is_official_sdk ? 1U : 0U;
 
-    std::memcpy(out_status, &status, sizeof(status));
+    const std::size_t bytes_to_copy = sender_status_v2_ok
+      ? sizeof(status)
+      : static_cast<std::size_t>(sender_status_v1_size);
+    std::memcpy(out_status, &status, bytes_to_copy);
     return RCH_RESULT_OK;
   } catch (...) {
     return RCH_RESULT_INTERNAL_ERROR;

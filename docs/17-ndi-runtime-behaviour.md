@@ -62,6 +62,16 @@ The deterministic native proof therefore covers:
 - newest-frame semantics prevent backlog growth on the sender path;
 - sender teardown remains safe during View destruction and engine shutdown.
 
+Sender diagnostics in this mode are sender-core/backend metrics only. They are measured from the sender worker loop and latest-composed-frame sequence progression, not from wire-level NDI interoperability.
+
+Key deterministic semantics:
+
+- `send_fps_milli` is measured over a bounded accepted-frame window; it is `0` until enough samples exist;
+- worker ticks are tracked separately from unique composed sequences observed;
+- `sent_frame_count` increments only when the backend accepts a frame publish attempt;
+- dropped/skipped counts are sequence-aware where deterministically inferable (missing frame, duplicate sequence tick, observed sequence gaps);
+- `receiver_count` is `0`/unknown unless the official SDK backend reports a real value.
+
 This implementation is the proof boundary for Gate 4A until the official NDI SDK is installed and live receiver validation is performed.
 
 ## SDK and live validation status

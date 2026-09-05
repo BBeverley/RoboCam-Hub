@@ -79,6 +79,26 @@ Temporary source-loss policy for Gate 3B:
 - if a source was previously healthy then goes missing, the quadrant freezes the
    last-good frame until fresh frames resume.
 
+Formal source-state semantics for the native View/source diagnostics API:
+
+- `Unbound` — no logical camera is attached to the source slot;
+- `WaitingForFirstFrame` — the source is bound but has not yet produced a
+   valid frame;
+- `Live` — the source currently owns a fresh latest frame and contributes to the
+   composite output;
+- `FrozenLastGood` — the source previously produced a valid frame and is now
+   showing the last-good still while the camera is unavailable or has not
+   resumed;
+- `Reconnecting` — the source is bound to a logical camera that is actively
+   retrying or restarting after an outage;
+- `MissingOrStale` — the source binding exists but the camera is removed,
+   destroyed, or otherwise no longer valid for the slot.
+
+These states are low-frequency status values exposed through the native ABI,
+not pixel ownership transfers. The render loop may also publish aggregate view
+health counters such as live/waiting/frozen/reconnecting totals and
+render-deadline miss counts for the last tick and cumulative lifetime.
+
 Implementation note:
 
 - this gate uses a native CPU compositor intended as a spike proof and is

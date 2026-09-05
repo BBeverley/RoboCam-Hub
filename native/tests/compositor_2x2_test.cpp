@@ -358,6 +358,18 @@ int main()
     }
   }
 
+  rch_view_source_status_v1 slot_status{};
+  slot_status.struct_size = sizeof(slot_status);
+  slot_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+  if (!Expect(rch_view_get_source_status(view, 0, &slot_status) == RCH_RESULT_OK,
+              "source-slot status query must succeed")
+      || !Expect(slot_status.source_state == RCH_VIEW_SOURCE_STATE_LIVE,
+                 "live source slot must report Live state")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
   rch_view_status_v1 view_status{};
   if (!Expect(WaitForViewForwardProgress(view, kProgressAdvanceFrames, kProgressTimeout, view_status),
               "view composed sequence must advance")) {

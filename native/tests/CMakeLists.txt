@@ -116,7 +116,10 @@ add_executable(robocamhub_ndi_sender_slow_backend_tests
   ../src/ingest/single_camera_ingest.cpp
   ../src/frames/latest_frame.cpp
 )
-target_compile_definitions(robocamhub_ndi_sender_slow_backend_tests PRIVATE RCH_NDI_SENDER_TESTING)
+target_compile_definitions(robocamhub_ndi_sender_slow_backend_tests PRIVATE
+  RCH_NDI_SENDER_TESTING
+  ROBOCAMHUB_NATIVE_BUILD
+)
 target_compile_features(robocamhub_ndi_sender_slow_backend_tests PRIVATE cxx_std_20)
 target_include_directories(robocamhub_ndi_sender_slow_backend_tests PRIVATE ../src ../include)
 target_link_libraries(robocamhub_ndi_sender_slow_backend_tests PRIVATE PkgConfig::GSTREAMER Threads::Threads)

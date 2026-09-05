@@ -1,16 +1,294 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:RoboCamHub.Application;assembly=RoboCamHub.Application"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        d:DesignWidth="800"
-        d:DesignHeight="450"
+        x:DataType="vm:WorkspaceViewModel"
+        d:DesignWidth="1440"
+        d:DesignHeight="900"
         x:Class="RoboCamHub.App.MainWindow"
-        Width="800"
-        Height="450"
-        Title="RoboCam Hub">
-    <TextBlock HorizontalAlignment="Center"
-               VerticalAlignment="Center"
-               FontSize="24"
-               Text="RoboCam Hub" />
+        Width="1440"
+        Height="900"
+        MinWidth="1120"
+        MinHeight="700"
+        Background="#111820"
+        Title="RoboCam-Hub — Edit Mode">
+
+    <Window.Resources>
+        <DataTemplate x:Key="SlotTemplate" x:DataType="vm:ViewSlotViewModel">
+            <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding SlotLabel}" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
+                        <TextBlock Foreground="{Binding HealthColor}" Text="{Binding HealthIcon}" />
+                        <TextBlock Text="{Binding SourceStateText}" />
+                    </StackPanel>
+                </Grid>
+                <StackPanel Grid.Row="1"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Spacing="4">
+                    <TextBlock HorizontalAlignment="Center"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Text="{Binding AssignedCameraName}" />
+                    <TextBlock HorizontalAlignment="Center"
+                               Classes="secondary"
+                               Text="Video preview intentionally unavailable" />
+                </StackPanel>
+                <StackPanel Grid.Row="2" Spacing="7">
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="7">
+                        <ComboBox Grid.Column="0"
+                                  ItemsSource="{Binding AvailableCameras}"
+                                  SelectedItem="{Binding SelectedCamera, Mode=TwoWay}"
+                                  PlaceholderText="Select camera">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:CameraItemViewModel">
+                                    <TextBlock Text="{Binding Name}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <Button Grid.Column="1" Classes="compact" Command="{Binding AssignCommand}" Content="Assign" />
+                        <Button Grid.Column="2" Classes="compact" Command="{Binding RemoveCommand}" Content="Remove" />
+                    </Grid>
+                    <TextBlock Classes="error"
+                               IsVisible="{Binding HasOperatorMessage}"
+                               Text="{Binding OperatorMessage}" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Window.Styles>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="#18222E" />
+            <Setter Property="BorderBrush" Value="#2C3A48" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="TextBlock.sectionTitle">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#91A4B8" />
+            <Setter Property="LetterSpacing" Value="1.5" />
+        </Style>
+        <Style Selector="TextBlock.secondary">
+            <Setter Property="Foreground" Value="#AAB7C4" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style Selector="TextBlock.error">
+            <Setter Property="Foreground" Value="#F6A0A0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="Button.compact">
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="MinWidth" Value="68" />
+        </Style>
+    </Window.Styles>
+
+    <Grid>
+        <Border x:Name="StartupPanel"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Classes="panel"
+                Padding="32">
+            <StackPanel Spacing="12">
+                <TextBlock FontSize="24" FontWeight="SemiBold" Text="RoboCam-Hub" />
+                <TextBlock x:Name="StartupText"
+                           Classes="secondary"
+                           Text="Starting native runtime…" />
+            </StackPanel>
+        </Border>
+
+        <Grid x:Name="WorkspaceRoot"
+              IsVisible="False"
+              RowDefinitions="64,*,Auto">
+            <Border Grid.Row="0"
+                    Background="#18222E"
+                    BorderBrush="#2C3A48"
+                    BorderThickness="0,0,0,1"
+                    Padding="22,0">
+                <Grid ColumnDefinitions="*,Auto">
+                    <StackPanel VerticalAlignment="Center" Spacing="2">
+                        <TextBlock FontSize="22" FontWeight="SemiBold" Text="{Binding ApplicationTitle}" />
+                        <TextBlock Classes="secondary" Text="Operational workspace · Gate 5B" />
+                    </StackPanel>
+                    <Border Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Background="#253B50"
+                            CornerRadius="5"
+                            Padding="12,6">
+                        <TextBlock FontSize="11"
+                                   FontWeight="Bold"
+                                   Foreground="#9DD3FF"
+                                   Text="{Binding ModeText}" />
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="1"
+                  ColumnDefinitions="330,*"
+                  Margin="16"
+                  ColumnSpacing="16">
+                <Border Grid.Column="0" Classes="panel" Padding="14">
+                    <Grid RowDefinitions="Auto,Auto,*" RowSpacing="12">
+                        <TextBlock Grid.Row="0" Classes="sectionTitle" Text="CAMERAS" />
+
+                        <Border Grid.Row="1" Background="#111820" CornerRadius="6" Padding="10">
+                            <StackPanel Spacing="8">
+                                <TextBlock FontWeight="SemiBold" Text="Add camera" />
+                                <TextBox PlaceholderText="Name (for example Spot 1)"
+                                         Text="{Binding NewCameraName, Mode=TwoWay}" />
+                                <TextBox PlaceholderText="rtsp://camera/profile2/media.smp"
+                                         Text="{Binding NewCameraRtspUrl, Mode=TwoWay}" />
+                                <Button HorizontalAlignment="Left"
+                                        Classes="compact"
+                                        Command="{Binding AddCameraCommand}"
+                                        Content="Add Camera" />
+                                <TextBlock Classes="error"
+                                           IsVisible="{Binding HasWorkspaceMessage}"
+                                           Text="{Binding WorkspaceMessage}" />
+                            </StackPanel>
+                        </Border>
+
+                        <ScrollViewer Grid.Row="2">
+                            <ItemsControl ItemsSource="{Binding Cameras}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:CameraItemViewModel">
+                                        <Border Background="#202C38"
+                                                BorderBrush="#334453"
+                                                BorderThickness="1"
+                                                CornerRadius="6"
+                                                Margin="0,0,0,9"
+                                                Padding="10">
+                                            <StackPanel Spacing="6">
+                                                <Grid ColumnDefinitions="*,Auto">
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
+                                                        <TextBlock Foreground="{Binding HealthColor}" Text="{Binding HealthIcon}" />
+                                                        <TextBlock Text="{Binding StateText}" />
+                                                    </StackPanel>
+                                                </Grid>
+                                                <TextBlock Classes="secondary"
+                                                           Text="{Binding AddressSummary}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip.Tip="{Binding AddressSummary}" />
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <Button Classes="compact" Command="{Binding StartCommand}" Content="Start" />
+                                                    <Button Classes="compact" Command="{Binding StopCommand}" Content="Stop" />
+                                                    <TextBlock VerticalAlignment="Center"
+                                                               Classes="secondary"
+                                                               IsVisible="{Binding IsBusy}"
+                                                               Text="Working…" />
+                                                </StackPanel>
+                                                <TextBlock Classes="error"
+                                                           IsVisible="{Binding HasOperatorMessage}"
+                                                           Text="{Binding OperatorMessage}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Column="1" Classes="panel" Padding="16">
+                    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="12">
+                        <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="sectionTitle" Text="VIEW" />
+                                <TextBlock FontSize="20" FontWeight="SemiBold" Text="{Binding View.Name}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" HorizontalAlignment="Right">
+                                <TextBlock HorizontalAlignment="Right" Text="{Binding View.StateText}" />
+                                <TextBlock Classes="secondary" Text="{Binding View.RenderFpsText}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Grid.Row="1" RowDefinitions="*,*" ColumnDefinitions="*,*" RowSpacing="10" ColumnSpacing="10">
+                            <Border Grid.Row="0" Grid.Column="0" Classes="panel" Padding="14">
+                                <ContentControl Content="{Binding View.Slots[0]}" ContentTemplate="{StaticResource SlotTemplate}" />
+                            </Border>
+                            <Border Grid.Row="0" Grid.Column="1" Classes="panel" Padding="14">
+                                <ContentControl Content="{Binding View.Slots[1]}" ContentTemplate="{StaticResource SlotTemplate}" />
+                            </Border>
+                            <Border Grid.Row="1" Grid.Column="0" Classes="panel" Padding="14">
+                                <ContentControl Content="{Binding View.Slots[2]}" ContentTemplate="{StaticResource SlotTemplate}" />
+                            </Border>
+                            <Border Grid.Row="1" Grid.Column="1" Classes="panel" Padding="14">
+                                <ContentControl Content="{Binding View.Slots[3]}" ContentTemplate="{StaticResource SlotTemplate}" />
+                            </Border>
+                        </Grid>
+
+                        <Border Grid.Row="2" Background="#111820" CornerRadius="6" Padding="12">
+                            <StackPanel HorizontalAlignment="Center" Spacing="3">
+                                <TextBlock HorizontalAlignment="Center"
+                                           FontWeight="SemiBold"
+                                           Text="Live View Preview" />
+                                <TextBlock Classes="secondary"
+                                           Text="Native video preview arrives in Gate 5C" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <Border Grid.Row="2" Classes="panel" Margin="16,0,16,16" Padding="14">
+                <Grid RowDefinitions="Auto,Auto" RowSpacing="10">
+                    <TextBlock Grid.Row="0" Classes="sectionTitle" Text="OUTPUTS" />
+                    <Grid Grid.Row="1">
+                        <StackPanel IsVisible="{Binding ShowOutputConfiguration}"
+                                    Orientation="Horizontal"
+                                    Spacing="10">
+                            <TextBox Width="220" PlaceholderText="Output name"
+                                     Text="{Binding NewOutputName, Mode=TwoWay}" />
+                            <TextBox Width="300" PlaceholderText="NDI source name"
+                                     Text="{Binding NewOutputNdiSourceName, Mode=TwoWay}" />
+                            <TextBlock VerticalAlignment="Center"
+                                       Classes="secondary"
+                                       Text="{Binding OutputViewLabel}" />
+                            <Button Classes="compact"
+                                    Command="{Binding AddOutputCommand}"
+                                    Content="Create Output" />
+                        </StackPanel>
+
+                        <ItemsControl ItemsSource="{Binding Outputs}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:OutputItemViewModel">
+                                    <Grid ColumnDefinitions="230,300,180,140,Auto" ColumnSpacing="12">
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                            <TextBlock Classes="secondary" Text="{Binding NdiSourceName}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="{Binding ViewLabel}" />
+                                            <TextBlock Classes="secondary" Text="{Binding SendFpsText}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                                            <TextBlock Foreground="{Binding HealthColor}" Text="{Binding HealthIcon}" />
+                                            <TextBlock Text="{Binding StateText}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="3"
+                                                   IsVisible="{Binding ReceiverCountKnown}"
+                                                   Text="{Binding ReceiverCountText}" />
+                                        <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="8">
+                                            <Button Classes="compact" Command="{Binding StartCommand}" Content="Start" />
+                                            <Button Classes="compact" Command="{Binding StopCommand}" Content="Stop" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="0" Grid.ColumnSpan="4" Margin="0,38,0,0"
+                                                   Classes="error"
+                                                   IsVisible="{Binding HasOperatorMessage}"
+                                                   Text="{Binding OperatorMessage}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
 </Window>

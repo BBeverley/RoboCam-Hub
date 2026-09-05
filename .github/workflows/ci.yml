@@ -122,3 +122,6 @@ jobs:
 
       - name: Run managed runtime/application integration tests
         run: dotnet test tests/managed/RoboCamHub.Runtime.Tests/RoboCamHub.Runtime.Tests.csproj --configuration Release --no-build --no-restore
+
+      - name: Run managed Avalonia workspace/application tests
+        run: dotnet test tests/managed/RoboCamHub.Application.Tests/RoboCamHub.Application.Tests.csproj --configuration Release --no-build --no-restore

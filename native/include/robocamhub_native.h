@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #define RCH_ABI_VERSION_MAJOR UINT32_C(1)
-#define RCH_ABI_VERSION_MINOR UINT32_C(4)
+#define RCH_ABI_VERSION_MINOR UINT32_C(5)
 #define RCH_ABI_VERSION ((RCH_ABI_VERSION_MAJOR << 16U) | RCH_ABI_VERSION_MINOR)
 
 #define RCH_CAMERA_CONFIG_VERSION UINT32_C(1)
@@ -37,7 +37,10 @@ extern "C" {
 #define RCH_FRAME_LEASE_STATUS_VERSION_V1 UINT32_C(1)
 #define RCH_FRAME_LEASE_STATUS_VERSION RCH_FRAME_LEASE_STATUS_VERSION_V1
 #define RCH_VIEW_STATUS_VERSION_V1 UINT32_C(1)
-#define RCH_VIEW_STATUS_VERSION RCH_VIEW_STATUS_VERSION_V1
+#define RCH_VIEW_STATUS_VERSION_V2 UINT32_C(2)
+#define RCH_VIEW_STATUS_VERSION RCH_VIEW_STATUS_VERSION_V2
+#define RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1 UINT32_C(1)
+#define RCH_VIEW_FRAME_LEASE_STATUS_VERSION RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1
 #define RCH_VIEW_MAX_SOURCE_SLOTS UINT32_C(16)
 #define RCH_NO_FRAME_AGE_MS UINT64_MAX
 
@@ -70,6 +73,14 @@ enum rch_camera_state_code {
   RCH_CAMERA_STATE_FAILED = 3,
   RCH_CAMERA_STATE_STOPPING = 4,
   RCH_CAMERA_STATE_WAITING_TO_RETRY = 5
+};
+
+/* Fixed-width view render-state constants for view diagnostics snapshots. */
+typedef uint32_t rch_view_render_state;
+
+enum rch_view_render_state_code {
+  RCH_VIEW_RENDER_STATE_STOPPED = 0,
+  RCH_VIEW_RENDER_STATE_RUNNING = 1
 };
 
 /* The UTF-8 strings are borrowed only for the duration of
@@ -169,7 +180,37 @@ typedef struct rch_view_status_v1 {
   uint32_t stale_or_missing_source_count;
   uint32_t reserved;
   uint64_t last_observed_source_sequence;
+  uint32_t render_state;
+  uint32_t configured_width;
+  uint32_t configured_height;
+  uint32_t target_fps;
+  uint64_t render_frame_count;
+  uint64_t latest_composed_frame_sequence;
+  uint64_t latest_composed_frame_age_ms;
+  uint32_t render_fps_milli;
+  uint32_t sources_contributing_count;
+  uint32_t output_consumer_count;
+  uint32_t reserved_v2;
+  uint32_t last_render_duration_us;
+  uint32_t average_render_duration_us;
+  uint32_t p95_render_duration_us;
+  uint32_t stale_source_frame_count;
 } rch_view_status_v1;
+
+/* Metadata snapshot for a leased composed View frame reference.
+ * This type never exposes full-frame payload ownership across the ABI. */
+typedef struct rch_view_frame_lease_status_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  uint32_t has_frame;
+  uint32_t width;
+  uint32_t height;
+  uint32_t reserved;
+  uint64_t composed_frame_count;
+  uint64_t latest_frame_sequence;
+  uint64_t latest_frame_timestamp_ns;
+  uint64_t latest_frame_age_ms;
+} rch_view_frame_lease_status_v1;
 
 /* Opaque, native-owned handle. Create it with rch_engine_create and release it
  * exactly once with rch_engine_destroy. */
@@ -177,6 +218,7 @@ typedef struct rch_engine* rch_engine_handle;
 typedef struct rch_frame_consumer* rch_frame_consumer_handle;
 typedef struct rch_frame_lease* rch_frame_lease_handle;
 typedef struct rch_view* rch_view_handle;
+typedef struct rch_view_frame_lease* rch_view_frame_lease_handle;
 
 RCH_API uint32_t rch_get_abi_version(void) RCH_NOEXCEPT;
 
@@ -315,6 +357,30 @@ RCH_API rch_result rch_view_unbind_source(
 RCH_API rch_result rch_view_get_status(
   rch_view_handle view,
   rch_view_status_v1* out_status) RCH_NOEXCEPT;
+
+/* Acquires a reference-counted lease to the latest composed View frame. */
+RCH_API rch_result rch_view_acquire_latest_frame(
+  rch_view_handle view,
+  rch_view_frame_lease_handle* out_lease) RCH_NOEXCEPT;
+
+/* Returns metadata for a composed-frame lease handle. */
+RCH_API rch_result rch_view_frame_lease_get_status(
+  rch_view_frame_lease_handle lease,
+  rch_view_frame_lease_status_v1* out_status) RCH_NOEXCEPT;
+
+/* Samples one RGBA pixel from a composed-frame lease at (x,y). */
+RCH_API rch_result rch_view_frame_lease_sample_rgba(
+  rch_view_frame_lease_handle lease,
+  uint32_t x,
+  uint32_t y,
+  uint8_t* out_r,
+  uint8_t* out_g,
+  uint8_t* out_b,
+  uint8_t* out_a) RCH_NOEXCEPT;
+
+/* Releases a composed-frame lease handle. */
+RCH_API rch_result rch_view_frame_lease_destroy(
+  rch_view_frame_lease_handle lease) RCH_NOEXCEPT;
 
 #if defined(__cplusplus)
 }

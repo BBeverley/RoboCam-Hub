@@ -182,6 +182,21 @@ Validate:
 - stable operation for at least 30 minutes;
 - basic source-loss placeholder/freeze behaviour.
 
+### Gate 3B implementation note
+
+The first Phase C implementation is allowed to use a temporary native CPU
+compositor if all of the following remain true:
+
+- camera ingest ownership remains one RTSP session and one decoder per
+  configured camera;
+- composition consumes shared latest-frame sources only;
+- output ownership remains bounded with newest-frame-wins semantics;
+- no per-frame decoded/composed payload is routed through managed C#;
+- diagnostics capture render cadence and freshness.
+
+Gate 3B currently uses this temporary CPU path and treats it as replaceable
+spike architecture, not final production GPU compositor design.
+
 ## Phase D — Direct NDI proof
 
 Publish the clean 2×2 View as NDI High Bandwidth.

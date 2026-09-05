@@ -31,7 +31,9 @@ ATOM EnsureWindowClass()
     window_class.style = CS_HREDRAW | CS_VREDRAW;
     window_class.lpfnWndProc = PreviewWindowProcedure;
     window_class.hInstance = GetModuleHandleW(nullptr);
-    window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(OCR_NORMAL));
+    // 32512 is the documented system resource identifier for IDC_ARROW. Use the
+    // explicit wide resource form so this remains independent of ANSI aliases.
+    window_class.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     window_class.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     window_class.lpszClassName = kPreviewWindowClass;
     atom = RegisterClassExW(&window_class);

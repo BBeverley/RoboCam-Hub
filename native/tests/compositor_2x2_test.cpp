@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <atomic>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -14,6 +15,8 @@ namespace {
 constexpr std::uint32_t kFixtureWidth = 960;
 constexpr std::uint32_t kFixtureHeight = 540;
 constexpr std::uint32_t kViewTargetFps = 60;
+constexpr std::uint32_t kGate3BViewSourceSlots = 4;
+constexpr std::uint32_t kFirstUnsupportedViewSlot = kGate3BViewSourceSlots;
 constexpr std::uint64_t kProgressAdvanceFrames = 4;
 constexpr auto kProgressTimeout = std::chrono::seconds(20);
 
@@ -162,6 +165,78 @@ rch_view_status_v1 QueryViewStatus(rch_view_handle view, bool& ok)
   ok = rch_view_get_status(view, &status) == RCH_RESULT_OK;
   return status;
 }
+
+bool ValidateViewStatusVersionCompatibility(rch_view_handle view,
+                                          uint32_t version,
+                                          uint32_t expected_size,
+                                          const char* label)
+{
+  alignas(rch_view_status_v1) std::uint8_t canary_buffer[sizeof(rch_view_status_v1) + 32];
+  std::memset(canary_buffer, 0xA5, sizeof(canary_buffer));
+  auto* status = reinterpret_cast<rch_view_status_v1*>(canary_buffer);
+  status->struct_size = expected_size;
+  status->struct_version = version;
+
+  const auto ok = rch_view_get_status(view, status) == RCH_RESULT_OK;
+  if (!ok || status->struct_size != expected_size || status->struct_version != version) {
+    return false;
+  }
+
+  for (std::size_t i = expected_size; i < sizeof(canary_buffer); ++i) {
+    if (canary_buffer[i] != static_cast<std::uint8_t>(0xA5)) {
+      std::cerr << "FAILED: " << label << " canary bytes were overwritten\n";
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void StressPollSourceStatus(rch_view_handle view,
+                            std::atomic<bool>& stop,
+                            std::atomic<std::uint32_t>& failures)
+{
+  while (!stop.load(std::memory_order_acquire)) {
+    for (std::uint32_t slot = 0; slot < kGate3BViewSourceSlots; ++slot) {
+      rch_view_source_status_v1 status{};
+      status.struct_size = sizeof(status);
+      status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+      if (rch_view_get_source_status(view, slot, &status) != RCH_RESULT_OK) {
+        failures.fetch_add(1U, std::memory_order_acq_rel);
+      }
+    }
+
+    rch_view_source_status_v1 unsupported_status{};
+    unsupported_status.struct_size = sizeof(unsupported_status);
+    unsupported_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+    if (rch_view_get_source_status(view, kFirstUnsupportedViewSlot, &unsupported_status)
+        != RCH_RESULT_INVALID_ARGUMENT) {
+      failures.fetch_add(1U, std::memory_order_acq_rel);
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+}
+
+class SourceStatusStressThreadGuard final {
+public:
+  SourceStatusStressThreadGuard(std::atomic<bool>& stop, std::thread& worker)
+    : stop_(stop), worker_(worker)
+  {
+  }
+
+  ~SourceStatusStressThreadGuard()
+  {
+    stop_.store(true, std::memory_order_release);
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+private:
+  std::atomic<bool>& stop_;
+  std::thread& worker_;
+};
 
 rch_view_frame_lease_status_v1 QueryViewLeaseStatus(rch_view_frame_lease_handle lease, bool& ok)
 {
@@ -358,6 +433,34 @@ int main()
     }
   }
 
+  rch_view_source_status_v1 unsupported_slot_status{};
+  unsupported_slot_status.struct_size = sizeof(unsupported_slot_status);
+  unsupported_slot_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+  if (!Expect(rch_view_bind_camera_source(view, kFirstUnsupportedViewSlot, camera_ids[0].c_str())
+                == RCH_RESULT_INVALID_ARGUMENT,
+              "slot 4 bind must be rejected for fixed 2x2 compositor")
+      || !Expect(rch_view_get_source_status(view, kFirstUnsupportedViewSlot, &unsupported_slot_status)
+                   == RCH_RESULT_INVALID_ARGUMENT,
+                 "slot 4 source-status query must be rejected for fixed 2x2 compositor")
+      || !Expect(rch_view_unbind_source(view, kFirstUnsupportedViewSlot) == RCH_RESULT_INVALID_ARGUMENT,
+                 "slot 4 unbind must be rejected for fixed 2x2 compositor")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  rch_view_source_status_v1 live_slot_status{};
+  live_slot_status.struct_size = sizeof(live_slot_status);
+  live_slot_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+  if (!Expect(rch_view_get_source_status(view, 0, &live_slot_status) == RCH_RESULT_OK,
+              "source-slot status query must succeed")
+      || !Expect(live_slot_status.source_state == RCH_VIEW_SOURCE_STATE_LIVE,
+                 "live source slot must report Live state")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
   rch_view_status_v1 view_status{};
   if (!Expect(WaitForViewForwardProgress(view, kProgressAdvanceFrames, kProgressTimeout, view_status),
               "view composed sequence must advance")) {
@@ -431,6 +534,17 @@ int main()
     return 1;
   }
 
+  std::atomic<bool> stop_source_status_stress{false};
+  std::atomic<std::uint32_t> source_status_failures{0};
+  std::thread source_status_stress_thread(
+    StressPollSourceStatus,
+    view,
+    std::ref(stop_source_status_stress),
+    std::ref(source_status_failures));
+  SourceStatusStressThreadGuard source_status_stress_guard(
+    stop_source_status_stress,
+    source_status_stress_thread);
+
   fixtures[1].Stop();
   if (!Expect(WaitForCameraOutageState(engine, camera_ids[1], std::chrono::seconds(8)),
               "one source outage must enter retry/failure lifecycle")
@@ -438,6 +552,22 @@ int main()
                  "view must continue rendering while one source is down")
       || !Expect(view_status.sources_contributing_count >= 3,
                  "other three sources must continue contributing while one source is down")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  rch_view_source_status_v1 outage_slot_status{};
+  outage_slot_status.struct_size = sizeof(outage_slot_status);
+  outage_slot_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+  if (!Expect(rch_view_get_source_status(view, 1, &outage_slot_status) == RCH_RESULT_OK,
+              "source-slot status query must remain valid during outage")
+      || !Expect(outage_slot_status.camera_state == RCH_CAMERA_STATE_WAITING_TO_RETRY
+                   || outage_slot_status.camera_state == RCH_CAMERA_STATE_STARTING
+                   || outage_slot_status.camera_state == RCH_CAMERA_STATE_FAILED,
+                 "underlying camera must remain in reconnect lifecycle while outage is active")
+      || !Expect(outage_slot_status.source_state == RCH_VIEW_SOURCE_STATE_FROZEN_LAST_GOOD,
+                 "prior live frame must render as frozen last-good while reconnecting source is still cached")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;
@@ -491,6 +621,33 @@ int main()
       || !Expect(diagnostics.configured_camera_count == 4, "re-add must keep configured camera count at 4")
       || !Expect(diagnostics.active_rtsp_session_total == 4, "re-add/rebind must keep RTSP total at 4")
       || !Expect(diagnostics.active_decoder_total == 4, "re-add/rebind must keep decoder total at 4")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  if (!Expect(ValidateViewStatusVersionCompatibility(view,
+                                                    RCH_VIEW_STATUS_VERSION_V1,
+                                                    static_cast<uint32_t>(offsetof(rch_view_status_v1, render_state)),
+                                                    "view status v1 caller compatibility"),
+              "v1 view status caller must remain compatible")
+      || !Expect(ValidateViewStatusVersionCompatibility(view,
+                                                      RCH_VIEW_STATUS_VERSION_V2,
+                                                      static_cast<uint32_t>(offsetof(rch_view_status_v1, live_source_count)),
+                                                      "view status v2 caller compatibility"),
+                 "v2 view status caller must remain compatible")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  stop_source_status_stress.store(true, std::memory_order_release);
+  if (source_status_stress_thread.joinable()) {
+    source_status_stress_thread.join();
+  }
+
+  if (!Expect(source_status_failures.load(std::memory_order_acquire) == 0U,
+              "source-status queries must remain race-free during render transitions")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;

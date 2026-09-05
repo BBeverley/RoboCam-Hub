@@ -38,7 +38,10 @@ extern "C" {
 #define RCH_FRAME_LEASE_STATUS_VERSION RCH_FRAME_LEASE_STATUS_VERSION_V1
 #define RCH_VIEW_STATUS_VERSION_V1 UINT32_C(1)
 #define RCH_VIEW_STATUS_VERSION_V2 UINT32_C(2)
-#define RCH_VIEW_STATUS_VERSION RCH_VIEW_STATUS_VERSION_V2
+#define RCH_VIEW_STATUS_VERSION_V3 UINT32_C(3)
+#define RCH_VIEW_STATUS_VERSION RCH_VIEW_STATUS_VERSION_V3
+#define RCH_VIEW_SOURCE_STATUS_VERSION_V1 UINT32_C(1)
+#define RCH_VIEW_SOURCE_STATUS_VERSION RCH_VIEW_SOURCE_STATUS_VERSION_V1
 #define RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1 UINT32_C(1)
 #define RCH_VIEW_FRAME_LEASE_STATUS_VERSION RCH_VIEW_FRAME_LEASE_STATUS_VERSION_V1
 #define RCH_VIEW_MAX_SOURCE_SLOTS UINT32_C(16)
@@ -81,6 +84,17 @@ typedef uint32_t rch_view_render_state;
 enum rch_view_render_state_code {
   RCH_VIEW_RENDER_STATE_STOPPED = 0,
   RCH_VIEW_RENDER_STATE_RUNNING = 1
+};
+
+typedef uint32_t rch_view_source_state;
+
+enum rch_view_source_state_code {
+  RCH_VIEW_SOURCE_STATE_UNBOUND = 0,
+  RCH_VIEW_SOURCE_STATE_WAITING_FOR_FIRST_FRAME = 1,
+  RCH_VIEW_SOURCE_STATE_LIVE = 2,
+  RCH_VIEW_SOURCE_STATE_FROZEN_LAST_GOOD = 3,
+  RCH_VIEW_SOURCE_STATE_RECONNECTING = 4,
+  RCH_VIEW_SOURCE_STATE_MISSING_OR_STALE = 5
 };
 
 /* The UTF-8 strings are borrowed only for the duration of
@@ -195,7 +209,30 @@ typedef struct rch_view_status_v1 {
   uint32_t average_render_duration_us;
   uint32_t p95_render_duration_us;
   uint32_t stale_source_frame_count;
+  uint32_t live_source_count;
+  uint32_t waiting_for_first_frame_count;
+  uint32_t frozen_source_count;
+  uint32_t reconnecting_source_count;
+  uint64_t render_deadline_miss_count;
+  uint32_t reserved_v3;
+  uint64_t last_render_deadline_miss_us;
+  uint64_t last_render_deadline_miss_sequence;
 } rch_view_status_v1;
+
+typedef struct rch_view_source_status_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  uint32_t slot_index;
+  uint32_t source_state;
+  uint32_t has_binding;
+  uint32_t freeze_cache_has_frame;
+  uint32_t source_live;
+  char camera_id_utf8[256];
+  uint64_t latest_observed_sequence;
+  uint64_t latest_source_frame_age_ms;
+  uint32_t camera_state;
+  uint32_t reserved;
+} rch_view_source_status_v1;
 
 /* Metadata snapshot for a leased composed View frame reference.
  * This type never exposes full-frame payload ownership across the ABI. */
@@ -342,13 +379,17 @@ RCH_API rch_result rch_view_destroy(
   rch_view_handle view) RCH_NOEXCEPT;
 
 /* Binds one source slot of a native View to a logical camera ID.
- * slot_index must be less than RCH_VIEW_MAX_SOURCE_SLOTS. */
+ * Gate 3B/3C fixed 2x2 compositor currently supports slot indices 0..3.
+ * Higher indices return RCH_RESULT_INVALID_ARGUMENT.
+ * RCH_VIEW_MAX_SOURCE_SLOTS remains the wider ABI ceiling for future layouts. */
 RCH_API rch_result rch_view_bind_camera_source(
   rch_view_handle view,
   uint32_t slot_index,
   const char* camera_id_utf8) RCH_NOEXCEPT;
 
-/* Clears the logical camera binding for a source slot. */
+/* Clears the logical camera binding for a source slot.
+ * Gate 3B/3C fixed 2x2 compositor currently supports slot indices 0..3.
+ * Higher indices return RCH_RESULT_INVALID_ARGUMENT. */
 RCH_API rch_result rch_view_unbind_source(
   rch_view_handle view,
   uint32_t slot_index) RCH_NOEXCEPT;
@@ -357,6 +398,14 @@ RCH_API rch_result rch_view_unbind_source(
 RCH_API rch_result rch_view_get_status(
   rch_view_handle view,
   rch_view_status_v1* out_status) RCH_NOEXCEPT;
+
+/* Returns point-in-time status for a single source slot in a View.
+ * Gate 3B/3C fixed 2x2 compositor currently supports slot indices 0..3.
+ * Higher indices return RCH_RESULT_INVALID_ARGUMENT. */
+RCH_API rch_result rch_view_get_source_status(
+  rch_view_handle view,
+  uint32_t slot_index,
+  rch_view_source_status_v1* out_status) RCH_NOEXCEPT;
 
 /* Acquires a reference-counted lease to the latest composed View frame. */
 RCH_API rch_result rch_view_acquire_latest_frame(

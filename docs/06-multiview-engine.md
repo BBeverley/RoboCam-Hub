@@ -65,6 +65,8 @@ Current Gate 3B behavior:
 
 - one View render loop targets 60 fps;
 - slots 0..3 map to fixed quadrants (TL, TR, BL, BR);
+- slot indices 4..15 are currently unsupported and return
+   `RCH_RESULT_INVALID_ARGUMENT` for bind/unbind/source-status APIs;
 - each render tick reads the freshest available frame per bound source;
 - the render loop never waits for all sources to align;
 - one slow/missing source does not stall other quadrants;
@@ -78,6 +80,31 @@ Temporary source-loss policy for Gate 3B:
    placeholder;
 - if a source was previously healthy then goes missing, the quadrant freezes the
    last-good frame until fresh frames resume.
+
+Formal source-state semantics for the native View/source diagnostics API:
+
+- `Unbound` — no logical camera is attached to the source slot;
+- `WaitingForFirstFrame` — the source is bound but has not yet produced a
+   valid frame;
+- `Live` — the source currently owns a fresh latest frame and contributes to the
+   composite output;
+- `FrozenLastGood` — the source previously produced a valid frame and is now
+   showing the last-good still while the camera is unavailable or has not
+   resumed;
+- `Reconnecting` — the source is bound to a logical camera that is actively
+   retrying or restarting after an outage, but there is no usable freeze cache to
+   render;
+- `MissingOrStale` — the source binding exists but the camera is removed,
+   destroyed, or otherwise no longer valid for the slot.
+
+These states describe the currently rendered source condition, not the
+underlying camera lifecycle. A previously-live slot may therefore report
+`FrozenLastGood` while the underlying camera is already in a reconnecting state,
+which is available separately through `camera_state`. `Reconnecting` is used only
+when the slot has no valid last-good frame to continue rendering. The render loop
+may also publish aggregate view health counters such as live/waiting/frozen/
+reconnecting totals and render-deadline miss counts for the last tick and
+cumulative lifetime.
 
 Implementation note:
 

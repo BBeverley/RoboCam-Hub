@@ -97,6 +97,12 @@ struct ViewSlotFreezeCache final {
   bool has_frame{false};
 };
 
+struct ViewSlotDiagnostics final {
+  std::atomic<std::uint32_t> source_state{RCH_VIEW_SOURCE_STATE_UNBOUND};
+  std::atomic<std::uint64_t> latest_sequence{0};
+  std::atomic<std::uint8_t> freeze_cache_has_frame{0};
+};
+
 struct ViewRenderStats final {
   std::uint64_t render_frame_count{0};
   std::uint64_t latest_composed_frame_sequence{0};
@@ -104,22 +110,33 @@ struct ViewRenderStats final {
   std::uint32_t bound_source_count{0};
   std::uint32_t sources_with_frame_count{0};
   std::uint32_t stale_or_missing_source_count{0};
+  std::uint32_t live_source_count{0};
+  std::uint32_t waiting_for_first_frame_count{0};
+  std::uint32_t frozen_source_count{0};
+  std::uint32_t reconnecting_source_count{0};
   std::uint32_t sources_contributing_count{0};
   std::uint32_t render_fps_milli{0};
   std::uint32_t last_render_duration_us{0};
   std::uint32_t average_render_duration_us{0};
   std::uint32_t p95_render_duration_us{0};
   std::uint32_t stale_source_frame_count{0};
+  std::uint64_t render_deadline_miss_count{0};
+  std::uint64_t last_render_deadline_miss_us{0};
+  std::uint64_t last_render_deadline_miss_sequence{0};
 };
 
 constexpr std::uint32_t kViewComposedWidth = 1920;
 constexpr std::uint32_t kViewComposedHeight = 1080;
 constexpr std::uint32_t kViewTargetFps = 60;
+constexpr std::size_t kGate3BViewSourceSlots = 4;
 constexpr std::size_t kViewComposedStride = static_cast<std::size_t>(kViewComposedWidth) * 4U;
 constexpr std::size_t kQuadrantWidth = kViewComposedWidth / 2U;
 constexpr std::size_t kQuadrantHeight = kViewComposedHeight / 2U;
 constexpr std::size_t kQuadrantStride = kQuadrantWidth * 4U;
 constexpr std::size_t kQuadrantPixels = kQuadrantWidth * kQuadrantHeight * 4U;
+
+static_assert(kGate3BViewSourceSlots <= RCH_VIEW_MAX_SOURCE_SLOTS,
+              "fixed compositor slot count must not exceed ABI slot ceiling");
 
 std::uint64_t MonotonicTimeNs()
 {
@@ -140,6 +157,11 @@ struct ViewState final {
     for (auto& cache : slot_freeze_cache) {
       cache.rgba.resize(kQuadrantPixels, 0U);
     }
+    for (auto& slot : slot_diagnostics) {
+      slot.source_state.store(RCH_VIEW_SOURCE_STATE_UNBOUND, std::memory_order_release);
+      slot.latest_sequence.store(0, std::memory_order_release);
+      slot.freeze_cache_has_frame.store(0, std::memory_order_release);
+    }
   }
 
   ~ViewState()
@@ -159,7 +181,8 @@ struct ViewState final {
   std::string view_id;
   std::mutex mutex;
   std::array<std::optional<ViewSourceBinding>, RCH_VIEW_MAX_SOURCE_SLOTS> sources{};
-  std::array<ViewSlotFreezeCache, 4> slot_freeze_cache{};
+  std::array<ViewSlotFreezeCache, kGate3BViewSourceSlots> slot_freeze_cache{};
+  std::array<ViewSlotDiagnostics, kGate3BViewSourceSlots> slot_diagnostics{};
   std::vector<std::uint8_t> composed_pixels;
   GstCaps* composed_caps{nullptr};
   robocamhub::frames::LatestFrame latest_composed_frame;
@@ -481,12 +504,13 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
   state->fps_window_frames = 0;
 
   constexpr auto frame_period = std::chrono::microseconds(1000000 / kViewTargetFps);
+  const auto frame_budget_us = static_cast<std::uint64_t>(frame_period.count());
   auto next_tick = std::chrono::steady_clock::now();
 
   while (!state->stop_requested.load(std::memory_order_acquire)) {
     const auto tick_start = std::chrono::steady_clock::now();
 
-    std::array<std::optional<ViewSourceBinding>, 4> active_sources{};
+    std::array<std::optional<ViewSourceBinding>, kGate3BViewSourceSlots> active_sources{};
     {
       std::lock_guard lock(state->mutex);
       for (std::size_t i = 0; i < active_sources.size(); ++i) {
@@ -499,8 +523,17 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
 
     for (std::size_t slot = 0; slot < active_sources.size(); ++slot) {
       auto& freeze_cache = state->slot_freeze_cache[slot];
+      auto& slot_diagnostics = state->slot_diagnostics[slot];
       const auto& binding = active_sources[slot];
       if (!binding.has_value()) {
+        freeze_cache.camera_id.clear();
+        freeze_cache.has_frame = false;
+        freeze_cache.last_sequence = 0;
+        slot_diagnostics.source_state.store(
+          RCH_VIEW_SOURCE_STATE_UNBOUND,
+          std::memory_order_release);
+        slot_diagnostics.latest_sequence.store(0, std::memory_order_release);
+        slot_diagnostics.freeze_cache_has_frame.store(0, std::memory_order_release);
         FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(32), UINT8_C(32), UINT8_C(32));
         continue;
       }
@@ -510,12 +543,21 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
         freeze_cache.camera_id = binding->camera_id;
         freeze_cache.has_frame = false;
         freeze_cache.last_sequence = 0;
+        slot_diagnostics.latest_sequence.store(0, std::memory_order_release);
+        slot_diagnostics.freeze_cache_has_frame.store(0, std::memory_order_release);
       }
 
       auto camera = binding->camera.lock();
       if (camera == nullptr || camera->ingest == nullptr || camera->removed.load(std::memory_order_acquire)) {
         ++tick_stats.stale_or_missing_source_count;
         ++tick_stats.stale_source_frame_count;
+        slot_diagnostics.latest_sequence.store(freeze_cache.last_sequence, std::memory_order_release);
+        slot_diagnostics.freeze_cache_has_frame.store(
+          freeze_cache.has_frame ? 1U : 0U,
+          std::memory_order_release);
+        slot_diagnostics.source_state.store(
+          RCH_VIEW_SOURCE_STATE_MISSING_OR_STALE,
+          std::memory_order_release);
         if (freeze_cache.has_frame) {
           BlitQuadrantFromCache(freeze_cache, state->composed_pixels, slot);
         } else {
@@ -524,24 +566,57 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
         continue;
       }
 
+      rch_camera_status_v1 camera_status{};
+      camera_status.struct_size = static_cast<std::uint32_t>(sizeof(camera_status));
+      camera_status.struct_version = RCH_CAMERA_STATUS_VERSION;
+      camera->ingest->FillStatus(camera_status);
+
       const auto lease = camera->ingest->AcquireLatestFrameLease();
       if (lease.has_frame && lease.sample() != nullptr
           && CopyAndScaleRgbaToQuadrant(lease.sample(), state->composed_pixels, slot, freeze_cache)) {
         ++tick_stats.sources_with_frame_count;
         ++tick_stats.sources_contributing_count;
+        ++tick_stats.live_source_count;
         freeze_cache.last_sequence = lease.sequence;
+        slot_diagnostics.latest_sequence.store(lease.sequence, std::memory_order_release);
+        slot_diagnostics.freeze_cache_has_frame.store(1U, std::memory_order_release);
+        slot_diagnostics.source_state.store(RCH_VIEW_SOURCE_STATE_LIVE, std::memory_order_release);
         if (lease.sequence > tick_stats.last_observed_source_sequence) {
           tick_stats.last_observed_source_sequence = lease.sequence;
         }
         continue;
       }
 
-      ++tick_stats.stale_or_missing_source_count;
-      ++tick_stats.stale_source_frame_count;
       if (freeze_cache.has_frame) {
+        ++tick_stats.frozen_source_count;
+        slot_diagnostics.source_state.store(
+          RCH_VIEW_SOURCE_STATE_FROZEN_LAST_GOOD,
+          std::memory_order_release);
         BlitQuadrantFromCache(freeze_cache, state->composed_pixels, slot);
+      } else if (camera_status.state == RCH_CAMERA_STATE_WAITING_TO_RETRY
+                 || camera_status.state == RCH_CAMERA_STATE_STARTING
+                 || camera_status.state == RCH_CAMERA_STATE_FAILED) {
+        ++tick_stats.reconnecting_source_count;
+        slot_diagnostics.source_state.store(
+          RCH_VIEW_SOURCE_STATE_RECONNECTING,
+          std::memory_order_release);
+        FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(48), UINT8_C(40), UINT8_C(18));
       } else {
+        ++tick_stats.waiting_for_first_frame_count;
+        slot_diagnostics.source_state.store(
+          RCH_VIEW_SOURCE_STATE_WAITING_FOR_FIRST_FRAME,
+          std::memory_order_release);
         FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(24), UINT8_C(24), UINT8_C(48));
+      }
+
+      slot_diagnostics.latest_sequence.store(freeze_cache.last_sequence, std::memory_order_release);
+      slot_diagnostics.freeze_cache_has_frame.store(
+        freeze_cache.has_frame ? 1U : 0U,
+        std::memory_order_release);
+
+      if (!freeze_cache.has_frame) {
+        ++tick_stats.stale_or_missing_source_count;
+        ++tick_stats.stale_source_frame_count;
       }
     }
 
@@ -552,6 +627,11 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
     const auto tick_end = std::chrono::steady_clock::now();
     const auto duration_us = static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::microseconds>(
       tick_end - tick_start).count());
+    if (duration_us > frame_budget_us) {
+      ++tick_stats.render_deadline_miss_count;
+      tick_stats.last_render_deadline_miss_us = duration_us - frame_budget_us;
+      tick_stats.last_render_deadline_miss_sequence = tick_stats.latest_composed_frame_sequence;
+    }
     UpdateRenderDurationStats(*state, duration_us);
 
     {
@@ -573,10 +653,19 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
       state->stats.bound_source_count = tick_stats.bound_source_count;
       state->stats.sources_with_frame_count = tick_stats.sources_with_frame_count;
       state->stats.stale_or_missing_source_count = tick_stats.stale_or_missing_source_count;
+      state->stats.live_source_count = tick_stats.live_source_count;
+      state->stats.waiting_for_first_frame_count = tick_stats.waiting_for_first_frame_count;
+      state->stats.frozen_source_count = tick_stats.frozen_source_count;
+      state->stats.reconnecting_source_count = tick_stats.reconnecting_source_count;
       state->stats.sources_contributing_count = tick_stats.sources_contributing_count;
       state->stats.last_observed_source_sequence = tick_stats.last_observed_source_sequence;
       state->stats.latest_composed_frame_sequence = tick_stats.latest_composed_frame_sequence;
       state->stats.stale_source_frame_count += tick_stats.stale_source_frame_count;
+      state->stats.render_deadline_miss_count += tick_stats.render_deadline_miss_count;
+      if (tick_stats.render_deadline_miss_count > 0) {
+        state->stats.last_render_deadline_miss_us = tick_stats.last_render_deadline_miss_us;
+        state->stats.last_render_deadline_miss_sequence = tick_stats.last_render_deadline_miss_sequence;
+      }
     }
 
     next_tick += frame_period;
@@ -1401,7 +1490,7 @@ extern "C" rch_result rch_view_bind_camera_source(
   if (view == nullptr) {
     return RCH_RESULT_INVALID_HANDLE;
   }
-  if (slot_index >= RCH_VIEW_MAX_SOURCE_SLOTS || !IsValidCameraIdUtf8(camera_id_utf8)) {
+  if (slot_index >= kGate3BViewSourceSlots || !IsValidCameraIdUtf8(camera_id_utf8)) {
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
@@ -1443,7 +1532,7 @@ extern "C" rch_result rch_view_unbind_source(
   if (view == nullptr) {
     return RCH_RESULT_INVALID_HANDLE;
   }
-  if (slot_index >= RCH_VIEW_MAX_SOURCE_SLOTS) {
+  if (slot_index >= kGate3BViewSourceSlots) {
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
@@ -1474,13 +1563,18 @@ extern "C" rch_result rch_view_get_status(
 
   constexpr std::uint32_t view_status_v1_size =
     static_cast<std::uint32_t>(offsetof(rch_view_status_v1, render_state));
+  constexpr std::uint32_t view_status_v2_size =
+    static_cast<std::uint32_t>(offsetof(rch_view_status_v1, live_source_count));
   const bool view_status_v1_ok =
     out_status->struct_version == RCH_VIEW_STATUS_VERSION_V1
     && out_status->struct_size >= view_status_v1_size;
   const bool view_status_v2_ok =
     out_status->struct_version == RCH_VIEW_STATUS_VERSION_V2
+    && out_status->struct_size >= view_status_v2_size;
+  const bool view_status_v3_ok =
+    out_status->struct_version == RCH_VIEW_STATUS_VERSION_V3
     && out_status->struct_size >= sizeof(rch_view_status_v1);
-  if (!view_status_v1_ok && !view_status_v2_ok) {
+  if (!view_status_v1_ok && !view_status_v2_ok && !view_status_v3_ok) {
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
@@ -1494,12 +1588,12 @@ extern "C" rch_result rch_view_get_status(
     }
 
     rch_view_status_v1 status{};
-    status.struct_size = view_status_v2_ok
+    status.struct_size = view_status_v3_ok
       ? static_cast<std::uint32_t>(sizeof(status))
-      : view_status_v1_size;
-    status.struct_version = view_status_v2_ok
-      ? RCH_VIEW_STATUS_VERSION_V2
-      : RCH_VIEW_STATUS_VERSION_V1;
+      : (view_status_v2_ok ? view_status_v2_size : view_status_v1_size);
+    status.struct_version = view_status_v3_ok
+      ? RCH_VIEW_STATUS_VERSION_V3
+      : (view_status_v2_ok ? RCH_VIEW_STATUS_VERSION_V2 : RCH_VIEW_STATUS_VERSION_V1);
 
     std::lock_guard source_lock(view->state->mutex);
     for (auto& source : view->state->sources) {
@@ -1526,7 +1620,7 @@ extern "C" rch_result rch_view_get_status(
     }
 
     status.reserved = 0;
-    if (view_status_v2_ok) {
+    if (view_status_v3_ok || view_status_v2_ok || view_status_v1_ok) {
       const auto composed = view->state->latest_composed_frame.Snapshot();
       std::lock_guard stats_lock(view->state->stats_mutex);
       status.render_state = view->state->render_running.load(std::memory_order_acquire)
@@ -1546,9 +1640,120 @@ extern "C" rch_result rch_view_get_status(
       status.average_render_duration_us = view->state->stats.average_render_duration_us;
       status.p95_render_duration_us = view->state->stats.p95_render_duration_us;
       status.stale_source_frame_count = view->state->stats.stale_source_frame_count;
+      status.live_source_count = view->state->stats.live_source_count;
+      status.waiting_for_first_frame_count = view->state->stats.waiting_for_first_frame_count;
+      status.frozen_source_count = view->state->stats.frozen_source_count;
+      status.reconnecting_source_count = view->state->stats.reconnecting_source_count;
+      status.render_deadline_miss_count = view->state->stats.render_deadline_miss_count;
+      status.last_render_deadline_miss_us = view->state->stats.last_render_deadline_miss_us;
+      status.last_render_deadline_miss_sequence = view->state->stats.last_render_deadline_miss_sequence;
     }
 
-    std::memcpy(out_status, &status, view_status_v2_ok ? sizeof(status) : view_status_v1_size);
+    const std::size_t bytes_to_copy = view_status_v3_ok
+      ? sizeof(rch_view_status_v1)
+      : (view_status_v2_ok ? static_cast<std::size_t>(view_status_v2_size)
+                          : static_cast<std::size_t>(view_status_v1_size));
+    std::memcpy(out_status, &status, bytes_to_copy);
+    return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_view_get_source_status(
+  rch_view_handle view,
+  uint32_t slot_index,
+  rch_view_source_status_v1* out_status) noexcept
+{
+  if (view == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (out_status == nullptr || slot_index >= kGate3BViewSourceSlots) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+  if (out_status->struct_version != RCH_VIEW_SOURCE_STATUS_VERSION
+      || out_status->struct_size < sizeof(rch_view_source_status_v1)) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  try {
+    if (view->destroyed.load(std::memory_order_acquire) || view->state == nullptr) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+    if (!IsRegistryActive(view->state->registry)
+        || view->state->removed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+
+    rch_view_source_status_v1 status{};
+    status.struct_size = static_cast<std::uint32_t>(sizeof(status));
+    status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+    status.slot_index = slot_index;
+    status.source_state = RCH_VIEW_SOURCE_STATE_UNBOUND;
+    status.has_binding = 0U;
+    status.freeze_cache_has_frame = 0U;
+    status.source_live = 0U;
+    status.camera_state = RCH_CAMERA_STATE_STOPPED;
+    status.latest_observed_sequence = 0U;
+    status.latest_source_frame_age_ms = RCH_NO_FRAME_AGE_MS;
+    std::memset(status.camera_id_utf8, 0, sizeof(status.camera_id_utf8));
+
+    std::lock_guard lock(view->state->mutex);
+    const auto& binding = view->state->sources[slot_index];
+    if (!binding.has_value()) {
+      std::memcpy(out_status, &status, sizeof(status));
+      return RCH_RESULT_OK;
+    }
+
+    status.has_binding = 1U;
+    const auto copy_length = std::min(
+      binding->camera_id.size(),
+      sizeof(status.camera_id_utf8) - 1U);
+    std::memcpy(status.camera_id_utf8, binding->camera_id.data(), copy_length);
+    status.camera_id_utf8[copy_length] = '\0';
+
+    const auto rendered_source_state = view->state->slot_diagnostics[slot_index].source_state.load(
+      std::memory_order_acquire);
+    const auto rendered_latest_sequence = view->state->slot_diagnostics[slot_index].latest_sequence.load(
+      std::memory_order_acquire);
+    const auto rendered_has_freeze = view->state->slot_diagnostics[slot_index].freeze_cache_has_frame.load(
+      std::memory_order_acquire);
+
+    auto camera = binding->camera.lock();
+    if (camera == nullptr || camera->ingest == nullptr || camera->removed.load(std::memory_order_acquire)) {
+      status.source_state = RCH_VIEW_SOURCE_STATE_MISSING_OR_STALE;
+      if (rendered_source_state == RCH_VIEW_SOURCE_STATE_MISSING_OR_STALE
+          || rendered_source_state == RCH_VIEW_SOURCE_STATE_FROZEN_LAST_GOOD) {
+        status.source_state = static_cast<std::uint32_t>(rendered_source_state);
+      }
+      status.freeze_cache_has_frame = rendered_has_freeze;
+      status.latest_observed_sequence = rendered_latest_sequence;
+      std::memcpy(out_status, &status, sizeof(status));
+      return RCH_RESULT_OK;
+    }
+
+    const auto lease = camera->ingest->AcquireLatestFrameLease();
+    rch_camera_status_v1 camera_status{};
+    camera_status.struct_size = static_cast<std::uint32_t>(sizeof(camera_status));
+    camera_status.struct_version = RCH_CAMERA_STATUS_VERSION;
+    camera->ingest->FillStatus(camera_status);
+    status.camera_state = camera_status.state;
+    status.latest_observed_sequence = lease.sequence;
+    status.latest_source_frame_age_ms = lease.has_frame ? lease.age_ms : RCH_NO_FRAME_AGE_MS;
+    status.freeze_cache_has_frame = rendered_has_freeze;
+    if (!lease.has_frame && rendered_latest_sequence > 0U) {
+      status.latest_observed_sequence = rendered_latest_sequence;
+    }
+    if (lease.has_frame && lease.sample() != nullptr
+        && (rendered_source_state == RCH_VIEW_SOURCE_STATE_UNBOUND
+            || rendered_source_state == RCH_VIEW_SOURCE_STATE_WAITING_FOR_FIRST_FRAME)) {
+      status.source_state = RCH_VIEW_SOURCE_STATE_LIVE;
+    } else {
+      status.source_state = static_cast<std::uint32_t>(rendered_source_state);
+    }
+    status.source_live = status.source_state == RCH_VIEW_SOURCE_STATE_LIVE ? 1U : 0U;
+
+    std::memcpy(out_status, &status, sizeof(status));
     return RCH_RESULT_OK;
   } catch (...) {
     return RCH_RESULT_INTERNAL_ERROR;

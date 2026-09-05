@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <atomic>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -188,6 +189,43 @@ bool ValidateViewStatusVersionCompatibility(rch_view_handle view,
 
   return true;
 }
+
+void StressPollSourceStatus(rch_view_handle view,
+                            std::atomic<bool>& stop,
+                            std::atomic<std::uint32_t>& failures)
+{
+  while (!stop.load(std::memory_order_acquire)) {
+    for (std::uint32_t slot = 0; slot < RCH_VIEW_MAX_SOURCE_SLOTS; ++slot) {
+      rch_view_source_status_v1 status{};
+      status.struct_size = sizeof(status);
+      status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+      if (rch_view_get_source_status(view, slot, &status) != RCH_RESULT_OK) {
+        failures.fetch_add(1U, std::memory_order_acq_rel);
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+}
+
+class SourceStatusStressThreadGuard final {
+public:
+  SourceStatusStressThreadGuard(std::atomic<bool>& stop, std::thread& worker)
+    : stop_(stop), worker_(worker)
+  {
+  }
+
+  ~SourceStatusStressThreadGuard()
+  {
+    stop_.store(true, std::memory_order_release);
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+private:
+  std::atomic<bool>& stop_;
+  std::thread& worker_;
+};
 
 rch_view_frame_lease_status_v1 QueryViewLeaseStatus(rch_view_frame_lease_handle lease, bool& ok)
 {
@@ -469,6 +507,17 @@ int main()
     return 1;
   }
 
+  std::atomic<bool> stop_source_status_stress{false};
+  std::atomic<std::uint32_t> source_status_failures{0};
+  std::thread source_status_stress_thread(
+    StressPollSourceStatus,
+    view,
+    std::ref(stop_source_status_stress),
+    std::ref(source_status_failures));
+  SourceStatusStressThreadGuard source_status_stress_guard(
+    stop_source_status_stress,
+    source_status_stress_thread);
+
   fixtures[1].Stop();
   if (!Expect(WaitForCameraOutageState(engine, camera_ids[1], std::chrono::seconds(8)),
               "one source outage must enter retry/failure lifecycle")
@@ -560,6 +609,18 @@ int main()
                                                       static_cast<uint32_t>(offsetof(rch_view_status_v1, live_source_count)),
                                                       "view status v2 caller compatibility"),
                  "v2 view status caller must remain compatible")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
+  }
+
+  stop_source_status_stress.store(true, std::memory_order_release);
+  if (source_status_stress_thread.joinable()) {
+    source_status_stress_thread.join();
+  }
+
+  if (!Expect(source_status_failures.load(std::memory_order_acquire) == 0U,
+              "source-status queries must remain race-free during render transitions")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;

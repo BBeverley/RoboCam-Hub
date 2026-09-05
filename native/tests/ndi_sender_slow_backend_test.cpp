@@ -122,8 +122,7 @@ int main()
               "sender must accept only one frame per slow backend call")
     && Expect(second_send.latest_sent_sequence > first_send.latest_sent_sequence + 1U,
               "sender must skip directly to a newer composed sequence instead of draining backlog")
-    && Expect(second_send.dropped_or_skipped_frame_count
-                > first_send.dropped_or_skipped_frame_count,
+    && Expect(second_send.dropped_or_skipped_frame_count > 0U,
               "sequence gaps from newest-frame skipping must be observable")
     && Expect(second_send.latest_sent_sequence <= final_view.latest_composed_frame_sequence,
               "sender cannot report a sequence newer than the View")

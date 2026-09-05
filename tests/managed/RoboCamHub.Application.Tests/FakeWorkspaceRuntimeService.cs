@@ -41,6 +41,8 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public Exception? StartCameraException { get; set; }
 
+    public Exception? AttachPreviewException { get; set; }
+
     public Func<Task>? StartCameraHandler { get; set; }
 
     public Func<Task>? StartOutputHandler { get; set; }
@@ -52,6 +54,10 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
     public int QueryCallCount { get; private set; }
 
     public bool IsDisposed { get; private set; }
+
+    public bool PreviewAttached { get; private set; }
+
+    public ViewPreviewRuntimeStatus? PreviewStatus { get; set; }
 
     public Task AddCameraAsync(CameraDefinition definition, CancellationToken cancellationToken = default)
     {
@@ -132,6 +138,23 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         return Task.CompletedTask;
     }
 
+    public void AttachPreview(PreviewHostSurface host)
+    {
+        if (AttachPreviewException is not null)
+        {
+            throw AttachPreviewException;
+        }
+        host.Validate();
+        PreviewAttached = true;
+        PreviewStatus = CreatePreviewStatus(ViewPreviewRuntimeState.Starting);
+    }
+
+    public void DetachPreview()
+    {
+        PreviewAttached = false;
+        PreviewStatus = null;
+    }
+
     public Task<WorkspaceRuntimeSnapshot> QueryStatusAsync(CancellationToken cancellationToken = default)
     {
         QueryCallCount++;
@@ -176,11 +199,16 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
                 5,
                 OutputDefinition is null ? 0U : 1U)),
             sourceStatuses,
-            outputs));
+            outputs,
+            PreviewAttached
+                ? RuntimeObservation<ViewPreviewRuntimeStatus>.Success(
+                    PreviewStatus ?? CreatePreviewStatus(ViewPreviewRuntimeState.Live))
+                : null));
     }
 
     public ValueTask DisposeAsync()
     {
+        PreviewAttached = false;
         IsDisposed = true;
         return ValueTask.CompletedTask;
     }
@@ -234,4 +262,20 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
             150,
             receiverCountKnown,
             receiverCount);
+
+    public static ViewPreviewRuntimeStatus CreatePreviewStatus(ViewPreviewRuntimeState state)
+        => new(
+            state,
+            state == ViewPreviewRuntimeState.Failed ? "InternalError" : "Ok",
+            true,
+            "view-main",
+            1920,
+            1080,
+            30,
+            state == ViewPreviewRuntimeState.Live ? 30_000U : 0U,
+            20,
+            40,
+            5,
+            19,
+            2);
 }

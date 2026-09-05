@@ -59,6 +59,26 @@ add_library(robocamhub_native SHARED
   src/ndi/ndi_sender_backend.cpp
 )
 
+if(WIN32)
+  target_sources(robocamhub_native PRIVATE src/preview/native_preview_surface_win.cpp)
+  target_link_libraries(robocamhub_native PRIVATE user32 gdi32)
+elseif(APPLE)
+  enable_language(OBJCXX)
+  target_sources(robocamhub_native PRIVATE src/preview/native_preview_surface_mac.mm)
+  set_source_files_properties(
+    src/preview/native_preview_surface_mac.mm
+    PROPERTIES COMPILE_FLAGS "-fno-objc-arc"
+  )
+  find_library(RCH_APPKIT_FRAMEWORK AppKit REQUIRED)
+  find_library(RCH_COREGRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
+  target_link_libraries(
+    robocamhub_native
+    PRIVATE
+      "${RCH_APPKIT_FRAMEWORK}"
+      "${RCH_COREGRAPHICS_FRAMEWORK}"
+  )
+endif()
+
 target_compile_features(robocamhub_native PRIVATE cxx_std_20)
 target_compile_definitions(robocamhub_native PRIVATE ROBOCAMHUB_NATIVE_BUILD)
 target_include_directories(robocamhub_native

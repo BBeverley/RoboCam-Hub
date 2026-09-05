@@ -177,6 +177,13 @@ internal sealed class RecordingNativeRuntimeView(List<string> events, string vie
         return NativeResult.Ok;
     }
 
+    public NativeResult TryCreatePreview(PreviewHostSurface host, out INativeRuntimePreview? preview)
+    {
+        events.Add($"preview:create:{viewId}:{host.Platform}:{host.TargetFps}");
+        preview = new RecordingNativeRuntimePreview(events, viewId, host.TargetFps);
+        return NativeResult.Ok;
+    }
+
     public void Dispose()
     {
         if (IsDisposed)
@@ -186,6 +193,44 @@ internal sealed class RecordingNativeRuntimeView(List<string> events, string vie
 
         IsDisposed = true;
         events.Add($"view:dispose:{viewId}");
+    }
+}
+
+internal sealed class RecordingNativeRuntimePreview(
+    List<string> events,
+    string viewId,
+    uint targetFps) : INativeRuntimePreview
+{
+    private bool _disposed;
+
+    public NativeResult TryGetStatus(out NativeViewPreviewStatus status)
+    {
+        events.Add($"preview:status:{viewId}");
+        status = new NativeViewPreviewStatus(
+            NativeViewPreviewState.Live,
+            NativeResult.Ok,
+            true,
+            1920,
+            1080,
+            targetFps,
+            targetFps * 1000,
+            2,
+            10,
+            20,
+            4,
+            10,
+            viewId);
+        return NativeResult.Ok;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        events.Add($"preview:dispose:{viewId}");
     }
 }
 

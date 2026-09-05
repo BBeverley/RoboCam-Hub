@@ -9,6 +9,7 @@ public sealed class ShowRuntime : IDisposable
     private readonly Dictionary<string, CameraRuntime> _cameras = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ViewRuntime> _views = new(StringComparer.Ordinal);
     private readonly Dictionary<string, OutputRuntime> _outputs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ViewPreviewRuntime> _previews = new(StringComparer.Ordinal);
     private bool _disposed;
 
     private ShowRuntime(INativeRuntimeEngine nativeEngine)
@@ -23,6 +24,8 @@ public sealed class ShowRuntime : IDisposable
     public IReadOnlyList<ViewRuntime> Views => [.. _views.Values];
 
     public IReadOnlyList<OutputRuntime> Outputs => [.. _outputs.Values];
+
+    public IReadOnlyList<ViewPreviewRuntime> Previews => [.. _previews.Values];
 
     public static ShowRuntime Create()
         => Create(new NativeRuntimeFactory());
@@ -186,6 +189,12 @@ public sealed class ShowRuntime : IDisposable
         }
 
         _disposed = true;
+        foreach (var preview in _previews.Values.Reverse().ToArray())
+        {
+            preview.DisposeOwned();
+        }
+
+        _previews.Clear();
         foreach (var output in _outputs.Values.Reverse().ToArray())
         {
             output.DisposeOwned();
@@ -227,6 +236,11 @@ public sealed class ShowRuntime : IDisposable
             return;
         }
 
+        if (_previews.Remove(view.Definition.Id, out var preview))
+        {
+            preview.DisposeOwned();
+        }
+
         foreach (var output in _outputs.Values
                      .Where(candidate => candidate.Definition.ViewId == view.Definition.Id)
                      .ToArray())
@@ -249,5 +263,38 @@ public sealed class ShowRuntime : IDisposable
         }
 
         output.DisposeOwned();
+    }
+
+    internal ViewPreviewRuntime AttachPreview(ViewRuntime view, PreviewHostSurface host)
+    {
+        ThrowIfDisposed();
+        if (_previews.ContainsKey(view.Definition.Id))
+        {
+            throw new InvalidOperationException(
+                $"View '{view.Definition.Id}' already owns a native preview attachment.");
+        }
+
+        var result = view.NativeView.TryCreatePreview(host, out var nativePreview);
+        RuntimeGuard.EnsureSuccess($"Attaching preview for View '{view.Definition.Id}'", result);
+        if (nativePreview is null)
+        {
+            throw new InvalidOperationException(
+                $"Attaching preview for View '{view.Definition.Id}' succeeded without a native wrapper.");
+        }
+
+        var preview = new ViewPreviewRuntime(this, view, nativePreview);
+        _previews.Add(view.Definition.Id, preview);
+        return preview;
+    }
+
+    internal void DisposePreview(ViewPreviewRuntime preview)
+    {
+        if (!_disposed
+            && _previews.TryGetValue(preview.View.Definition.Id, out var registered)
+            && ReferenceEquals(registered, preview))
+        {
+            _previews.Remove(preview.View.Definition.Id);
+        }
+        preview.DisposeOwned();
     }
 }

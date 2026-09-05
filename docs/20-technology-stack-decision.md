@@ -271,6 +271,14 @@ If a zero-copy or low-copy GPU-backed preview path is available and reliable, us
 
 A CPU-copy preview fallback may exist for compatibility, but it must never become the NDI source and must not back-pressure the compositor.
 
+Gate 5C adopts Avalonia `NativeControlHost` as the cross-platform host boundary.
+The native core creates a child HWND on Windows or NSView on macOS and presents
+the existing CPU RGBA composed-frame lease with GDI or Core Graphics. This is a
+native-only presentation path: no per-frame managed array, bitmap copy or
+callback is introduced. The choice preserves the ownership model while leaving
+the presenter replaceable if a later approved GPU compositor produces shareable
+textures. See ADR 0002.
+
 ## NDI integration
 
 NDI sending remains entirely native.

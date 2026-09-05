@@ -82,11 +82,45 @@ internal unsafe struct NativeNdiSenderStatusV1
     public uint reserved_v2;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct NativeViewPreviewConfigV1
+{
+    public uint struct_size;
+    public uint struct_version;
+    public ulong host_native_handle;
+    public NativeViewPreviewPlatform platform;
+    public uint target_fps;
+    public fixed uint reserved[4];
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct NativeViewPreviewStatusV1
+{
+    public uint struct_size;
+    public uint struct_version;
+    public NativeViewPreviewState state;
+    public NativeResult last_result;
+    public uint attached;
+    public uint configured_width;
+    public uint configured_height;
+    public uint target_fps;
+    public uint presentation_fps_milli;
+    public uint surface_recreate_count;
+    public uint reserved;
+    public ulong presented_frame_count;
+    public ulong latest_presented_sequence;
+    public ulong latest_presented_frame_age_ms;
+    public ulong dropped_or_skipped_frame_count;
+    public fixed byte view_id_utf8[256];
+}
+
 internal static partial class NativeMethods
 {
     internal const uint ViewStatusVersion = 3;
     internal const uint ViewSourceStatusVersion = 1;
     internal const uint NdiSenderStatusVersion = 2;
+    internal const uint ViewPreviewConfigVersion = 1;
+    internal const uint ViewPreviewStatusVersion = 1;
 
     [LibraryImport(LibraryName, EntryPoint = "rch_view_create", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial NativeResult ViewCreate(
@@ -136,4 +170,18 @@ internal static partial class NativeMethods
     internal static partial NativeResult NdiSenderGetStatus(
         NativeNdiSenderHandle sender,
         ref NativeNdiSenderStatusV1 outStatus);
+
+    [LibraryImport(LibraryName, EntryPoint = "rch_view_preview_create")]
+    internal static partial NativeResult ViewPreviewCreate(
+        NativeViewHandle view,
+        in NativeViewPreviewConfigV1 config,
+        out NativeViewPreviewHandle preview);
+
+    [LibraryImport(LibraryName, EntryPoint = "rch_view_preview_destroy")]
+    internal static partial NativeResult ViewPreviewDestroy(nint preview);
+
+    [LibraryImport(LibraryName, EntryPoint = "rch_view_preview_get_status")]
+    internal static partial NativeResult ViewPreviewGetStatus(
+        NativeViewPreviewHandle preview,
+        ref NativeViewPreviewStatusV1 outStatus);
 }

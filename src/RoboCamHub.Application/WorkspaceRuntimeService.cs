@@ -14,6 +14,8 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
     private readonly object _definitionGate = new();
     private readonly List<CameraDefinition> _cameraDefinitions = [];
     private OutputDefinition? _outputDefinition;
+    private readonly object _previewGate = new();
+    private ViewPreviewRuntime? _preview;
     private int _disposed;
 
     private WorkspaceRuntimeService(ShowRuntime showRuntime, ViewDefinition viewDefinition)
@@ -121,6 +123,25 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
     public Task StopOutputAsync(string outputId, CancellationToken cancellationToken = default)
         => RunAsync(showRuntime => showRuntime.GetOutput(outputId).Stop(), cancellationToken);
 
+    public void AttachPreview(PreviewHostSurface host)
+    {
+        ThrowIfDisposed();
+        lock (_previewGate)
+        {
+            _preview?.Dispose();
+            _preview = _showRuntime.GetView(ViewDefinition.Id).AttachPreview(host);
+        }
+    }
+
+    public void DetachPreview()
+    {
+        lock (_previewGate)
+        {
+            _preview?.Dispose();
+            _preview = null;
+        }
+    }
+
     public Task<WorkspaceRuntimeSnapshot> QueryStatusAsync(CancellationToken cancellationToken = default)
         => RunAsync(
             showRuntime =>
@@ -146,7 +167,21 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
                         output.GetStatus,
                         $"Output '{output.Definition.Id}' status is temporarily unavailable."),
                     StringComparer.Ordinal);
-                return new WorkspaceRuntimeSnapshot(cameras, viewStatus, sourceStatuses, outputs);
+                RuntimeObservation<ViewPreviewRuntimeStatus>? previewStatus;
+                lock (_previewGate)
+                {
+                    previewStatus = _preview is null
+                        ? null
+                        : Observe(
+                            _preview.GetStatus,
+                            $"Preview for View '{ViewDefinition.Id}' status is temporarily unavailable.");
+                }
+                return new WorkspaceRuntimeSnapshot(
+                    cameras,
+                    viewStatus,
+                    sourceStatuses,
+                    outputs,
+                    previewStatus);
             },
             cancellationToken);
 
@@ -160,6 +195,7 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
         await _runtimeGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            DetachPreview();
             await Task.Run(_showRuntime.Dispose).ConfigureAwait(false);
         }
         finally

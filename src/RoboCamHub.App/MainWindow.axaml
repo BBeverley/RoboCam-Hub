@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:RoboCamHub.Application;assembly=RoboCamHub.Application"
+        xmlns:local="clr-namespace:RoboCamHub.App"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
@@ -17,7 +18,7 @@
 
     <Window.Resources>
         <DataTemplate x:Key="SlotTemplate" x:DataType="vm:ViewSlotViewModel">
-            <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+            <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="7">
                 <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
                     <TextBlock FontWeight="SemiBold" Text="{Binding SlotLabel}" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="5">
@@ -25,18 +26,9 @@
                         <TextBlock Text="{Binding SourceStateText}" />
                     </StackPanel>
                 </Grid>
-                <StackPanel Grid.Row="1"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center"
-                            Spacing="4">
-                    <TextBlock HorizontalAlignment="Center"
-                               FontSize="18"
-                               FontWeight="SemiBold"
-                               Text="{Binding AssignedCameraName}" />
-                    <TextBlock HorizontalAlignment="Center"
-                               Classes="secondary"
-                               Text="Video preview intentionally unavailable" />
-                </StackPanel>
+                <TextBlock Grid.Row="1"
+                           FontWeight="SemiBold"
+                           Text="{Binding AssignedCameraName}" />
                 <StackPanel Grid.Row="2" Spacing="7">
                     <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="7">
                         <ComboBox Grid.Column="0"
@@ -113,7 +105,7 @@
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel VerticalAlignment="Center" Spacing="2">
                         <TextBlock FontSize="22" FontWeight="SemiBold" Text="{Binding ApplicationTitle}" />
-                        <TextBlock Classes="secondary" Text="Operational workspace · Gate 5B" />
+                        <TextBlock Classes="secondary" Text="Operational workspace · Gate 5C" />
                     </StackPanel>
                     <Border Grid.Column="1"
                             VerticalAlignment="Center"
@@ -196,42 +188,67 @@
                 </Border>
 
                 <Border Grid.Column="1" Classes="panel" Padding="16">
-                    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="12">
+                    <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="12">
                         <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
                             <StackPanel Spacing="2">
                                 <TextBlock Classes="sectionTitle" Text="VIEW" />
                                 <TextBlock FontSize="20" FontWeight="SemiBold" Text="{Binding View.Name}" />
                             </StackPanel>
-                            <StackPanel Grid.Column="1" HorizontalAlignment="Right">
-                                <TextBlock HorizontalAlignment="Right" Text="{Binding View.StateText}" />
-                                <TextBlock Classes="secondary" Text="{Binding View.RenderFpsText}" />
+                            <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
+                                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="5">
+                                    <TextBlock Foreground="{Binding Preview.HealthColor}" Text="{Binding Preview.HealthIcon}" />
+                                    <TextBlock Text="{Binding Preview.StateText}" />
+                                </StackPanel>
+                                <TextBlock HorizontalAlignment="Right" Classes="secondary" Text="{Binding View.RenderFpsText}" />
+                                <TextBlock HorizontalAlignment="Right" Classes="secondary" Text="{Binding Preview.PresentationFpsText}" />
                             </StackPanel>
                         </Grid>
 
-                        <Grid Grid.Row="1" RowDefinitions="*,*" ColumnDefinitions="*,*" RowSpacing="10" ColumnSpacing="10">
-                            <Border Grid.Row="0" Grid.Column="0" Classes="panel" Padding="14">
+                        <Border Grid.Row="1"
+                                Background="#05080B"
+                                BorderBrush="#334453"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                ClipToBounds="True">
+                            <local:NativeViewPreviewHost x:Name="ViewPreviewHost"
+                                                         HorizontalAlignment="Stretch"
+                                                         VerticalAlignment="Stretch" />
+                        </Border>
+
+                        <!-- NativeControlHost content occupies a native airspace. Keep diagnostics
+                             outside it so they remain visible on both HWND and NSView hosts. -->
+                        <Border Grid.Row="2"
+                                Background="#111820"
+                                CornerRadius="5"
+                                Padding="9,6">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                    <TextBlock Classes="secondary" Text="{Binding Preview.FrameAgeText}" />
+                                    <TextBlock Classes="secondary" Text="{Binding Preview.LatestPresentedSequence, StringFormat='Sequence {0}'}" />
+                                    <TextBlock Classes="secondary" Text="{Binding Preview.DroppedOrSkippedFrameCount, StringFormat='Skipped {0}'}" />
+                                    <TextBlock Classes="secondary" Text="{Binding Preview.SurfaceRecreateCount, StringFormat='Surface resets {0}'}" />
+                                </StackPanel>
+                                <TextBlock Grid.Column="1"
+                                           Classes="error"
+                                           IsVisible="{Binding Preview.HasOperatorMessage}"
+                                           Text="{Binding Preview.OperatorMessage}" />
+                            </Grid>
+                        </Border>
+
+                        <Grid Grid.Row="3" RowDefinitions="Auto,Auto" ColumnDefinitions="*,*" RowSpacing="8" ColumnSpacing="8">
+                            <Border Grid.Row="0" Grid.Column="0" Classes="panel" Padding="10">
                                 <ContentControl Content="{Binding View.Slots[0]}" ContentTemplate="{StaticResource SlotTemplate}" />
                             </Border>
-                            <Border Grid.Row="0" Grid.Column="1" Classes="panel" Padding="14">
+                            <Border Grid.Row="0" Grid.Column="1" Classes="panel" Padding="10">
                                 <ContentControl Content="{Binding View.Slots[1]}" ContentTemplate="{StaticResource SlotTemplate}" />
                             </Border>
-                            <Border Grid.Row="1" Grid.Column="0" Classes="panel" Padding="14">
+                            <Border Grid.Row="1" Grid.Column="0" Classes="panel" Padding="10">
                                 <ContentControl Content="{Binding View.Slots[2]}" ContentTemplate="{StaticResource SlotTemplate}" />
                             </Border>
-                            <Border Grid.Row="1" Grid.Column="1" Classes="panel" Padding="14">
+                            <Border Grid.Row="1" Grid.Column="1" Classes="panel" Padding="10">
                                 <ContentControl Content="{Binding View.Slots[3]}" ContentTemplate="{StaticResource SlotTemplate}" />
                             </Border>
                         </Grid>
-
-                        <Border Grid.Row="2" Background="#111820" CornerRadius="6" Padding="12">
-                            <StackPanel HorizontalAlignment="Center" Spacing="3">
-                                <TextBlock HorizontalAlignment="Center"
-                                           FontWeight="SemiBold"
-                                           Text="Live View Preview" />
-                                <TextBlock Classes="secondary"
-                                           Text="Native video preview arrives in Gate 5C" />
-                            </StackPanel>
-                        </Border>
                     </Grid>
                 </Border>
             </Grid>

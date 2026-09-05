@@ -119,6 +119,39 @@ public sealed class NativeView : IDisposable
         return NativeResult.Ok;
     }
 
+    public unsafe NativeResult TryCreatePreview(
+        NativeViewPreviewPlatform platform,
+        ulong hostNativeHandle,
+        uint targetFps,
+        out NativeViewPreview? preview)
+    {
+        if (hostNativeHandle == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(hostNativeHandle));
+        }
+        if (targetFps is 0 or > 60)
+        {
+            throw new ArgumentOutOfRangeException(nameof(targetFps));
+        }
+        var config = new NativeViewPreviewConfigV1
+        {
+            struct_size = (uint)Marshal.SizeOf<NativeViewPreviewConfigV1>(),
+            struct_version = NativeMethods.ViewPreviewConfigVersion,
+            host_native_handle = hostNativeHandle,
+            platform = platform,
+            target_fps = targetFps,
+        };
+        var result = NativeMethods.ViewPreviewCreate(GetHandleOrThrow(), in config, out var handle);
+        if (result != NativeResult.Ok || handle is null || handle.IsInvalid)
+        {
+            handle?.Dispose();
+            preview = null;
+            return result == NativeResult.Ok ? NativeResult.InternalError : result;
+        }
+        preview = new NativeViewPreview(handle);
+        return NativeResult.Ok;
+    }
+
     public void Dispose()
     {
         Interlocked.Exchange(ref _handle, null)?.Dispose();

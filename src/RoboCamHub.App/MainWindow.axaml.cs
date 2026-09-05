@@ -30,6 +30,7 @@ public partial class MainWindow : Window
 
             _workspace = new WorkspaceViewModel(runtime, new AvaloniaUiDispatcher());
             DataContext = _workspace;
+            ViewPreviewHost.Preview = _workspace.Preview;
             StartupPanel.IsVisible = false;
             WorkspaceRoot.IsVisible = true;
             _workspace.StartStatusPolling();
@@ -67,6 +68,7 @@ public partial class MainWindow : Window
 
     private async Task DisposeAndCloseAsync()
     {
+        ViewPreviewHost.DetachPreview();
         await _workspace!.DisposeAsync();
         _workspace = null;
         DataContext = null;

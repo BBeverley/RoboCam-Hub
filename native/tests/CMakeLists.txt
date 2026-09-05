@@ -110,14 +110,18 @@ set_tests_properties(robocamhub_native.ndi_sender PROPERTIES TIMEOUT 30)
 
 # Compile the native engine into a test-only executable so deterministic backend
 # latency can be injected without exporting a test hook from the shared-library ABI.
+# The full engine also references preview creation, so link the private fake presenter
+# and select its synthetic NSView platform value on every headless test host.
 add_executable(robocamhub_ndi_sender_slow_backend_tests
   ndi_sender_slow_backend_test.cpp
+  preview_test_platform_stub.cpp
   ../src/engine/robocamhub_native.cpp
   ../src/ingest/single_camera_ingest.cpp
   ../src/frames/latest_frame.cpp
 )
 target_compile_definitions(robocamhub_ndi_sender_slow_backend_tests PRIVATE
   RCH_NDI_SENDER_TESTING
+  RCH_PLATFORM_MACOS=1
   ROBOCAMHUB_NATIVE_BUILD
 )
 target_compile_features(robocamhub_ndi_sender_slow_backend_tests PRIVATE cxx_std_20)
@@ -129,6 +133,29 @@ rch_enable_sanitizers(robocamhub_ndi_sender_slow_backend_tests)
 add_test(NAME robocamhub_native.ndi_sender_slow_backend
          COMMAND robocamhub_ndi_sender_slow_backend_tests)
 set_tests_properties(robocamhub_native.ndi_sender_slow_backend PROPERTIES TIMEOUT 15)
+
+# Compile the actual engine with a private fake platform presenter. This proves
+# preview scheduling and ownership without exposing test hooks in the C ABI or
+# requiring a real HWND/NSView in headless CI.
+add_executable(robocamhub_view_preview_tests
+  view_preview_test.cpp
+  preview_test_platform_stub.cpp
+  ../src/engine/robocamhub_native.cpp
+  ../src/ingest/single_camera_ingest.cpp
+  ../src/frames/latest_frame.cpp
+)
+target_compile_definitions(robocamhub_view_preview_tests PRIVATE
+  RCH_PLATFORM_MACOS=1
+  ROBOCAMHUB_NATIVE_BUILD
+)
+target_compile_features(robocamhub_view_preview_tests PRIVATE cxx_std_20)
+target_include_directories(robocamhub_view_preview_tests PRIVATE ../src ../include)
+target_link_libraries(robocamhub_view_preview_tests PRIVATE PkgConfig::GSTREAMER Threads::Threads)
+set_target_properties(robocamhub_view_preview_tests PROPERTIES CXX_EXTENSIONS OFF)
+rch_enable_project_warnings(robocamhub_view_preview_tests)
+rch_enable_sanitizers(robocamhub_view_preview_tests)
+add_test(NAME robocamhub_native.view_preview COMMAND robocamhub_view_preview_tests)
+set_tests_properties(robocamhub_native.view_preview PROPERTIES TIMEOUT 20)
 
 # Compile the actual ingest implementation separately so deterministic scheduling
 # hooks and private test access never enter the shared library or exported ABI.

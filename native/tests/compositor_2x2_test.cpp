@@ -15,6 +15,8 @@ namespace {
 constexpr std::uint32_t kFixtureWidth = 960;
 constexpr std::uint32_t kFixtureHeight = 540;
 constexpr std::uint32_t kViewTargetFps = 60;
+constexpr std::uint32_t kGate3BViewSourceSlots = 4;
+constexpr std::uint32_t kFirstUnsupportedViewSlot = kGate3BViewSourceSlots;
 constexpr std::uint64_t kProgressAdvanceFrames = 4;
 constexpr auto kProgressTimeout = std::chrono::seconds(20);
 
@@ -195,7 +197,7 @@ void StressPollSourceStatus(rch_view_handle view,
                             std::atomic<std::uint32_t>& failures)
 {
   while (!stop.load(std::memory_order_acquire)) {
-    for (std::uint32_t slot = 0; slot < RCH_VIEW_MAX_SOURCE_SLOTS; ++slot) {
+    for (std::uint32_t slot = 0; slot < kGate3BViewSourceSlots; ++slot) {
       rch_view_source_status_v1 status{};
       status.struct_size = sizeof(status);
       status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
@@ -203,6 +205,15 @@ void StressPollSourceStatus(rch_view_handle view,
         failures.fetch_add(1U, std::memory_order_acq_rel);
       }
     }
+
+    rch_view_source_status_v1 unsupported_status{};
+    unsupported_status.struct_size = sizeof(unsupported_status);
+    unsupported_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+    if (rch_view_get_source_status(view, kFirstUnsupportedViewSlot, &unsupported_status)
+        != RCH_RESULT_INVALID_ARGUMENT) {
+      failures.fetch_add(1U, std::memory_order_acq_rel);
+    }
+
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
 }
@@ -420,6 +431,22 @@ int main()
       rch_engine_destroy(engine);
       return 1;
     }
+  }
+
+  rch_view_source_status_v1 unsupported_slot_status{};
+  unsupported_slot_status.struct_size = sizeof(unsupported_slot_status);
+  unsupported_slot_status.struct_version = RCH_VIEW_SOURCE_STATUS_VERSION;
+  if (!Expect(rch_view_bind_camera_source(view, kFirstUnsupportedViewSlot, camera_ids[0].c_str())
+                == RCH_RESULT_INVALID_ARGUMENT,
+              "slot 4 bind must be rejected for fixed 2x2 compositor")
+      || !Expect(rch_view_get_source_status(view, kFirstUnsupportedViewSlot, &unsupported_slot_status)
+                   == RCH_RESULT_INVALID_ARGUMENT,
+                 "slot 4 source-status query must be rejected for fixed 2x2 compositor")
+      || !Expect(rch_view_unbind_source(view, kFirstUnsupportedViewSlot) == RCH_RESULT_INVALID_ARGUMENT,
+                 "slot 4 unbind must be rejected for fixed 2x2 compositor")) {
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return 1;
   }
 
   rch_view_source_status_v1 live_slot_status{};

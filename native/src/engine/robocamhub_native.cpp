@@ -128,11 +128,15 @@ struct ViewRenderStats final {
 constexpr std::uint32_t kViewComposedWidth = 1920;
 constexpr std::uint32_t kViewComposedHeight = 1080;
 constexpr std::uint32_t kViewTargetFps = 60;
+constexpr std::size_t kGate3BViewSourceSlots = 4;
 constexpr std::size_t kViewComposedStride = static_cast<std::size_t>(kViewComposedWidth) * 4U;
 constexpr std::size_t kQuadrantWidth = kViewComposedWidth / 2U;
 constexpr std::size_t kQuadrantHeight = kViewComposedHeight / 2U;
 constexpr std::size_t kQuadrantStride = kQuadrantWidth * 4U;
 constexpr std::size_t kQuadrantPixels = kQuadrantWidth * kQuadrantHeight * 4U;
+
+static_assert(kGate3BViewSourceSlots <= RCH_VIEW_MAX_SOURCE_SLOTS,
+              "fixed compositor slot count must not exceed ABI slot ceiling");
 
 std::uint64_t MonotonicTimeNs()
 {
@@ -177,8 +181,8 @@ struct ViewState final {
   std::string view_id;
   std::mutex mutex;
   std::array<std::optional<ViewSourceBinding>, RCH_VIEW_MAX_SOURCE_SLOTS> sources{};
-  std::array<ViewSlotFreezeCache, 4> slot_freeze_cache{};
-  std::array<ViewSlotDiagnostics, 4> slot_diagnostics{};
+  std::array<ViewSlotFreezeCache, kGate3BViewSourceSlots> slot_freeze_cache{};
+  std::array<ViewSlotDiagnostics, kGate3BViewSourceSlots> slot_diagnostics{};
   std::vector<std::uint8_t> composed_pixels;
   GstCaps* composed_caps{nullptr};
   robocamhub::frames::LatestFrame latest_composed_frame;
@@ -506,7 +510,7 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
   while (!state->stop_requested.load(std::memory_order_acquire)) {
     const auto tick_start = std::chrono::steady_clock::now();
 
-    std::array<std::optional<ViewSourceBinding>, 4> active_sources{};
+    std::array<std::optional<ViewSourceBinding>, kGate3BViewSourceSlots> active_sources{};
     {
       std::lock_guard lock(state->mutex);
       for (std::size_t i = 0; i < active_sources.size(); ++i) {
@@ -1486,7 +1490,7 @@ extern "C" rch_result rch_view_bind_camera_source(
   if (view == nullptr) {
     return RCH_RESULT_INVALID_HANDLE;
   }
-  if (slot_index >= RCH_VIEW_MAX_SOURCE_SLOTS || !IsValidCameraIdUtf8(camera_id_utf8)) {
+  if (slot_index >= kGate3BViewSourceSlots || !IsValidCameraIdUtf8(camera_id_utf8)) {
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
@@ -1528,7 +1532,7 @@ extern "C" rch_result rch_view_unbind_source(
   if (view == nullptr) {
     return RCH_RESULT_INVALID_HANDLE;
   }
-  if (slot_index >= RCH_VIEW_MAX_SOURCE_SLOTS) {
+  if (slot_index >= kGate3BViewSourceSlots) {
     return RCH_RESULT_INVALID_ARGUMENT;
   }
 
@@ -1664,7 +1668,7 @@ extern "C" rch_result rch_view_get_source_status(
   if (view == nullptr) {
     return RCH_RESULT_INVALID_HANDLE;
   }
-  if (out_status == nullptr || slot_index >= RCH_VIEW_MAX_SOURCE_SLOTS) {
+  if (out_status == nullptr || slot_index >= kGate3BViewSourceSlots) {
     return RCH_RESULT_INVALID_ARGUMENT;
   }
   if (out_status->struct_version != RCH_VIEW_SOURCE_STATUS_VERSION

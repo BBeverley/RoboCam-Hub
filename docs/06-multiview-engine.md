@@ -65,6 +65,8 @@ Current Gate 3B behavior:
 
 - one View render loop targets 60 fps;
 - slots 0..3 map to fixed quadrants (TL, TR, BL, BR);
+- slot indices 4..15 are currently unsupported and return
+   `RCH_RESULT_INVALID_ARGUMENT` for bind/unbind/source-status APIs;
 - each render tick reads the freshest available frame per bound source;
 - the render loop never waits for all sources to align;
 - one slow/missing source does not stall other quadrants;

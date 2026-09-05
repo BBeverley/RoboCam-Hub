@@ -379,13 +379,17 @@ RCH_API rch_result rch_view_destroy(
   rch_view_handle view) RCH_NOEXCEPT;
 
 /* Binds one source slot of a native View to a logical camera ID.
- * slot_index must be less than RCH_VIEW_MAX_SOURCE_SLOTS. */
+ * Gate 3B/3C fixed 2x2 compositor currently supports slot indices 0..3.
+ * Higher indices return RCH_RESULT_INVALID_ARGUMENT.
+ * RCH_VIEW_MAX_SOURCE_SLOTS remains the wider ABI ceiling for future layouts. */
 RCH_API rch_result rch_view_bind_camera_source(
   rch_view_handle view,
   uint32_t slot_index,
   const char* camera_id_utf8) RCH_NOEXCEPT;
 
-/* Clears the logical camera binding for a source slot. */
+/* Clears the logical camera binding for a source slot.
+ * Gate 3B/3C fixed 2x2 compositor currently supports slot indices 0..3.
+ * Higher indices return RCH_RESULT_INVALID_ARGUMENT. */
 RCH_API rch_result rch_view_unbind_source(
   rch_view_handle view,
   uint32_t slot_index) RCH_NOEXCEPT;
@@ -395,7 +399,9 @@ RCH_API rch_result rch_view_get_status(
   rch_view_handle view,
   rch_view_status_v1* out_status) RCH_NOEXCEPT;
 
-/* Returns point-in-time status for a single source slot in a View. */
+/* Returns point-in-time status for a single source slot in a View.
+ * Gate 3B/3C fixed 2x2 compositor currently supports slot indices 0..3.
+ * Higher indices return RCH_RESULT_INVALID_ARGUMENT. */
 RCH_API rch_result rch_view_get_source_status(
   rch_view_handle view,
   uint32_t slot_index,

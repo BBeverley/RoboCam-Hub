@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <NativeSourceDirectory>$(MSBuildProjectDirectory)/../../../native</NativeSourceDirectory>
+    <NativeBuildDirectory>$(BaseIntermediateOutputPath)native/$(Configuration)</NativeBuildDirectory>
+    <NativeConfigureArguments>-DBUILD_TESTING=OFF</NativeConfigureArguments>
+    <NativeConfigureArguments Condition="'$(OS)' != 'Windows_NT'">$(NativeConfigureArguments) -DCMAKE_BUILD_TYPE=$(Configuration)</NativeConfigureArguments>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\RoboCamHub.Domain\RoboCamHub.Domain.csproj" />
+    <ProjectReference Include="..\..\..\src\RoboCamHub.NativeInterop\RoboCamHub.NativeInterop.csproj" />
+    <ProjectReference Include="..\..\..\src\RoboCamHub.Runtime\RoboCamHub.Runtime.csproj" />
+  </ItemGroup>
+
+  <Target Name="BuildNativeLibrary" BeforeTargets="Build">
+    <Exec Command="cmake -S &quot;$(NativeSourceDirectory)&quot; -B &quot;$(NativeBuildDirectory)&quot; $(NativeConfigureArguments)" />
+    <Exec Command="cmake --build &quot;$(NativeBuildDirectory)&quot; --config $(Configuration) --parallel" />
+
+    <ItemGroup>
+      <_BuiltNativeLibrary Include="$(NativeBuildDirectory)/**/robocamhub_native.dll" />
+      <_BuiltNativeLibrary Include="$(NativeBuildDirectory)/**/librobocamhub_native.dylib" />
+      <_BuiltNativeLibrary Include="$(NativeBuildDirectory)/**/librobocamhub_native.so" />
+    </ItemGroup>
+
+    <Error Condition="'@(_BuiltNativeLibrary)' == ''"
+           Text="The native RoboCam Hub library was not produced by CMake." />
+    <Copy SourceFiles="@(_BuiltNativeLibrary)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

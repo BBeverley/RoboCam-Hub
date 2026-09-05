@@ -51,6 +51,25 @@ A View may have zero, one or multiple Outputs.
 
 Multiple Outputs may reference the same View.
 
+## Native ownership and backpressure semantics
+
+The direct native sender is intentionally attached to the clean composed View frame, not to the camera ingest pipeline. The sender consumes only the latest composed frame snapshot and drops stale frames rather than queueing them. This preserves the repository guarantee that a slow NDI consumer does not become a source-side bottleneck. The sender also remains isolated from the camera lifecycle: RTSP sessions and decoders are created once per configured logical camera and stay stable while the sender is started or stopped.
+
+The deterministic native proof therefore covers:
+
+- four configured cameras keep four RTSP sessions and four decoder pipelines;
+- sender start/stop does not change those totals;
+- newest-frame semantics prevent backlog growth on the sender path;
+- sender teardown remains safe during View destruction and engine shutdown.
+
+This implementation is the proof boundary for Gate 4A until the official NDI SDK is installed and live receiver validation is performed.
+
+## SDK and live validation status
+
+This repository intentionally does not check in any proprietary NDI SDK content. The production integration path is to install the official NDI SDK on the build host and allow CMake to discover it through the standard vendor installation variables or prefixes. Real-time publish/discovery validation remains a host dependency and is not considered a passing Gate 4A result in CI without an installed official SDK and a known-good receiver on the same network.
+
+As of the current environment, the official NDI SDK is not installed locally, so live NDI discovery, source name validation, and receiver-side frame verification remain deferred until an approved SDK installation is available.
+
 ## Naming
 
 Each Output has two related names.

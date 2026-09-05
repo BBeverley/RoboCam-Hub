@@ -101,7 +101,7 @@ set_tests_properties(robocamhub_native.compositor_2x2 PROPERTIES TIMEOUT 90)
 
 add_executable(robocamhub_ndi_sender_tests ndi_sender_test.cpp)
 target_compile_features(robocamhub_ndi_sender_tests PRIVATE cxx_std_20)
-target_link_libraries(robocamhub_ndi_sender_tests PRIVATE robocamhub_native Threads::Threads)
+target_link_libraries(robocamhub_ndi_sender_tests PRIVATE robocamhub_native PkgConfig::GSTREAMER_RTSP_SERVER Threads::Threads)
 set_target_properties(robocamhub_ndi_sender_tests PROPERTIES CXX_EXTENSIONS OFF)
 rch_enable_project_warnings(robocamhub_ndi_sender_tests)
 rch_enable_sanitizers(robocamhub_ndi_sender_tests)

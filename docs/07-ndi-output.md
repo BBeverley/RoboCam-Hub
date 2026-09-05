@@ -163,6 +163,29 @@ Initial target:
 
 NDI HX variants may be added later if useful, but they should not be the first implementation target because followspot monitoring prioritises latency over bandwidth efficiency.
 
+## Gate 4A ownership path
+
+For Gate 4A, the sender must remain a direct native publication of the already-composed View frame. It does not own a second ingest pipeline, does not create a second RTSP connection, and does not create an extra decoder. The sender binds to the latest composed frame output of an existing View and consumes newest-frame semantics without queue growth.
+
+The implementation contract remains:
+
+```text
+configured camera
+  → one RTSP session
+  → one decoder pipeline
+  → shared latest-frame state
+  → View compositor
+  → direct sender from composed frame
+```
+
+This ensures that slow output or a stalled sender cannot back-pressure camera ingest. The sender is a bounded output consumer, not a second production camera path.
+
+## Official SDK discovery
+
+The official NDI SDK is not bundled in this repository and must not be committed. The build must discover it from an installed SDK location without shipping proprietary binaries or scripts. The expected CMake contract is an installed SDK surface that exposes headers and libraries in a system or developer-defined prefix, for example via `NDI_SDK_ROOT`, `NDI_INSTALL_DIR`, or a standard `CMAKE_PREFIX_PATH`/`CMAKE_LIBRARY_PATH` injection. The repo remains neutral on the exact vendor installation path, but it must never rely on an in-tree proprietary copy.
+
+Local validation continues only after the official SDK is installed on the host. Until that installation is present, the code path remains deterministic native proof only and must not be reported as live NDI sender interoperability.
+
 ## View resolution vs output resolution
 
 A View and an NDI Output are independent.

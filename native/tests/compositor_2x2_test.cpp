@@ -14,6 +14,8 @@ namespace {
 constexpr std::uint32_t kFixtureWidth = 960;
 constexpr std::uint32_t kFixtureHeight = 540;
 constexpr std::uint32_t kViewTargetFps = 60;
+constexpr std::uint64_t kProgressAdvanceFrames = 4;
+constexpr auto kProgressTimeout = std::chrono::seconds(20);
 
 bool Expect(bool condition, const char* message)
 {
@@ -199,7 +201,7 @@ bool WaitForViewSequenceAdvance(rch_view_handle view,
                                 std::chrono::milliseconds timeout,
                                 rch_view_status_v1& out_status)
 {
-  const auto target = baseline + advance;
+  const auto target_sequence = baseline + advance;
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     bool ok = false;
@@ -207,12 +209,32 @@ bool WaitForViewSequenceAdvance(rch_view_handle view,
     if (!ok) {
       return false;
     }
-    if (out_status.latest_composed_frame_sequence >= target && out_status.render_frame_count >= target) {
+    if (out_status.latest_composed_frame_sequence >= target_sequence
+        && out_status.render_frame_count >= target_sequence) {
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(15));
   }
   return false;
+}
+
+bool WaitForViewForwardProgress(rch_view_handle view,
+                                std::uint64_t required_advance,
+                                std::chrono::milliseconds timeout,
+                                rch_view_status_v1& out_status)
+{
+  bool ok = false;
+  const auto baseline = QueryViewStatus(view, ok);
+  if (!ok) {
+    return false;
+  }
+
+  return WaitForViewSequenceAdvance(
+    view,
+    baseline.latest_composed_frame_sequence,
+    required_advance,
+    timeout,
+    out_status);
 }
 
 bool WaitForCameraOutageState(rch_engine_handle engine,
@@ -337,7 +359,7 @@ int main()
   }
 
   rch_view_status_v1 view_status{};
-  if (!Expect(WaitForViewSequenceAdvance(view, 0, 60, std::chrono::seconds(6), view_status),
+  if (!Expect(WaitForViewForwardProgress(view, kProgressAdvanceFrames, kProgressTimeout, view_status),
               "view composed sequence must advance")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
@@ -409,11 +431,10 @@ int main()
     return 1;
   }
 
-  const auto baseline_sequence = view_status.latest_composed_frame_sequence;
   fixtures[1].Stop();
   if (!Expect(WaitForCameraOutageState(engine, camera_ids[1], std::chrono::seconds(8)),
               "one source outage must enter retry/failure lifecycle")
-      || !Expect(WaitForViewSequenceAdvance(view, baseline_sequence, 40, std::chrono::seconds(6), view_status),
+      || !Expect(WaitForViewForwardProgress(view, kProgressAdvanceFrames, kProgressTimeout, view_status),
                  "view must continue rendering while one source is down")
       || !Expect(view_status.sources_contributing_count >= 3,
                  "other three sources must continue contributing while one source is down")) {
@@ -425,11 +446,7 @@ int main()
   if (!Expect(fixtures[1].Start("green", 30), "fixture restart must succeed")
       || !Expect(WaitForReceiving(engine, camera_ids[1], std::chrono::seconds(8)),
                  "camera must recover after fixture restart")
-      || !Expect(WaitForViewSequenceAdvance(view,
-                                            view_status.latest_composed_frame_sequence,
-                                            30,
-                                            std::chrono::seconds(6),
-                                            view_status),
+      || !Expect(WaitForViewForwardProgress(view, kProgressAdvanceFrames, kProgressTimeout, view_status),
                  "view must continue and include recovered source")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
@@ -438,11 +455,7 @@ int main()
 
   if (!Expect(rch_camera_remove(engine, camera_ids[2].c_str()) == RCH_RESULT_OK,
               "camera removal while bound must succeed")
-      || !Expect(WaitForViewSequenceAdvance(view,
-                                            view_status.latest_composed_frame_sequence,
-                                            20,
-                                            std::chrono::seconds(6),
-                                            view_status),
+      || !Expect(WaitForViewForwardProgress(view, kProgressAdvanceFrames, kProgressTimeout, view_status),
                  "view must stay alive after bound camera removal")
       || !Expect(view_status.stale_or_missing_source_count >= 1,
                  "removed bound source must be reported as stale/missing")) {

@@ -182,11 +182,31 @@ This ensures that slow output or a stalled sender cannot back-pressure camera in
 
 ## Official SDK discovery
 
-The official NDI SDK is not bundled in this repository and must not be committed. The build must discover it from an installed SDK location without shipping proprietary binaries or scripts. The expected CMake contract is an installed SDK surface that exposes headers and libraries in a system or developer-defined prefix, for example via `NDI_SDK_ROOT`, `NDI_INSTALL_DIR`, or a standard `CMAKE_PREFIX_PATH`/`CMAKE_LIBRARY_PATH` injection. The repo remains neutral on the exact vendor installation path, but it must never rely on an in-tree proprietary copy.
+The official NDI SDK is not bundled in this repository and must not be committed. CMake discovers it from an installed SDK location without shipping proprietary binaries or scripts. Set `RCH_NDI_SDK_ROOT`, `NDI_SDK_ROOT`, `NDI_SDK_DIR`, or `NDI_INSTALL_DIR`, or provide standard CMake include/library search paths. On macOS, the vendor's standard `/Library/NDI SDK for Apple` installation is also discovered automatically. The configured build reports both the selected include directory and library.
 
-Local validation continues only after the official SDK is installed on the host. Until that installation is present, the code path remains deterministic native proof only and must not be reported as live NDI sender interoperability.
+`RCH_ENABLE_NDI_SDK=ON` is the default. When both the header and library are found, the production native library builds the official adapter. Failure to initialise the discovered runtime or create its sender is reported as sender creation failure; production does not silently switch to the deterministic backend.
 
 When the SDK is not discovered, the native sender runs in deterministic sender-core/backend proof mode. This mode validates lifecycle, ownership, latest-frame handoff, and bounded newest-wins behavior; it does not claim real NDI publish/discovery success.
+
+Public GitHub-hosted CI intentionally does not install or redistribute the proprietary SDK. Its Windows x64 and macOS arm64 jobs therefore compile and test the deterministic backend plus all non-NDI regressions. A local build with an externally installed official SDK is required to compile and validate real NDI interoperability.
+
+## Gate 4A official sender lifecycle and frame format
+
+Gate 4A owns one official NDI runtime reference and one SDK sender instance per native sender handle. The sender is created with `clock_video=true`, `clock_audio=false`, and is retained across start/stop and receiver disconnect/reconnect. Destroy first joins the existing bounded worker, then destroys the SDK sender and releases the runtime reference. SDK types remain private to the adapter and never cross the plain C ABI.
+
+The existing View produces tightly packed 1920×1080 RGBA progressive frames at a nominal 60 fps. The official SDK exposes `NDIlib_FourCC_video_type_RGBA`, so the adapter maps the retained GStreamer buffer read-only and calls the synchronous `NDIlib_send_send_video_v2` API with that pointer and a `width × 4` stride. RoboCam-Hub performs no per-frame color conversion and adds no full-frame copy. The synchronous API is deliberate: the lease stays valid for exactly the call, avoiding the extra in-flight buffers required by the SDK's asynchronous API. Any SDK-internal compression or conversion remains owned by the SDK.
+
+The call runs only on the existing bounded sender worker. If it is slow, the View compositor continues independently and the next worker iteration acquires the newest composed frame rather than draining a queue. Receiver count is sampled through the SDK's non-blocking connection-count query at most once per second and exposed through the existing low-frequency sender status.
+
+For a real four-camera proof, configure with `RCH_ENABLE_NDI_SDK=ON` and run the manual probe:
+
+```shell
+cmake -S native -B native/build-ndi -DBUILD_TESTING=ON -DRCH_BUILD_NDI_PROBE=ON -DRCH_ENABLE_NDI_SDK=ON -DRCH_NDI_SDK_ROOT="/path/to/installed/NDI SDK" -DCMAKE_BUILD_TYPE=Release
+cmake --build native/build-ndi --config Release --parallel
+native/build-ndi/bin/robocamhub_ndi_sender_probe 600 <rtsp-url-1> <rtsp-url-2> <rtsp-url-3> <rtsp-url-4>
+```
+
+The probe uses the fixed `ROBOCAM - Gate4A` source name and refuses to run when only the deterministic backend is active. It reports View/sender cadence, frame age, send duration, skipped sequences, receiver count, individual camera state, and aggregate RTSP/decoder ownership each second. It does not replace receiver-side visual validation.
 
 ## View resolution vs output resolution
 

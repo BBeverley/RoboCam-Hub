@@ -2,6 +2,7 @@
 
 #include "frames/latest_frame.h"
 #include "ingest/single_camera_ingest.h"
+#include "ndi/ndi_sender_backend.h"
 
 #include <gst/gst.h>
 
@@ -224,17 +225,16 @@ struct rch_view_frame_lease final {
 bool IsRegistryActive(const std::shared_ptr<EngineRegistry>& registry);
 void DecrementIfPositive(std::atomic<std::uint32_t>& counter);
 
-struct SenderBackendSendResult final {
-  bool accepted{false};
-  std::uint32_t result{RCH_RESULT_INTERNAL_ERROR};
-  bool receiver_count_known{false};
-  std::uint32_t receiver_count{0};
-};
-
-using SenderBackendSendFn = SenderBackendSendResult (*)(const robocamhub::frames::LatestFrameLease& lease);
+using SenderBackendSendResult = robocamhub::ndi::SenderBackendSendResult;
+using SenderBackendSendFn = SenderBackendSendResult (*)(
+  void* context,
+  const robocamhub::frames::LatestFrameLease& lease) noexcept;
+using SenderBackendDestroyFn = void (*)(void* context) noexcept;
 
 struct SenderBackendDispatch final {
+  void* context{nullptr};
   SenderBackendSendFn send{nullptr};
+  SenderBackendDestroyFn destroy{nullptr};
   bool is_official_sdk{false};
 };
 
@@ -280,8 +280,12 @@ bool IsValidLabelUtf8(const char* value, std::size_t max_length)
     && g_utf8_validate(value, -1, nullptr) != FALSE;
 }
 
-SenderBackendSendResult DeterministicSenderBackendSend(const robocamhub::frames::LatestFrameLease& lease)
+#if !defined(RCH_HAS_NDI_SDK)
+SenderBackendSendResult DeterministicSenderBackendSend(
+  void* context,
+  const robocamhub::frames::LatestFrameLease& lease) noexcept
 {
+  static_cast<void>(context);
   SenderBackendSendResult result{};
   if (!lease.has_frame || lease.sample() == nullptr) {
     result.accepted = false;
@@ -295,6 +299,7 @@ SenderBackendSendResult DeterministicSenderBackendSend(const robocamhub::frames:
   result.receiver_count = 0U;
   return result;
 }
+#endif
 
 void UpdateAcceptedSendRate(rch_ndi_sender& sender, std::chrono::steady_clock::time_point now)
 {
@@ -425,7 +430,7 @@ void NdiSenderWorker(const std::shared_ptr<ViewState>& state, rch_ndi_sender* se
 #endif
     const auto backend_send = sender->backend.send == nullptr
       ? SenderBackendSendResult{}
-      : sender->backend.send(lease);
+      : sender->backend.send(sender->backend.context, lease);
     sender->last_result.store(backend_send.result, std::memory_order_release);
     if (!backend_send.accepted || backend_send.result != RCH_RESULT_OK) {
       sender->dropped_or_skipped_frame_count.fetch_add(1U, std::memory_order_acq_rel);
@@ -494,8 +499,19 @@ extern "C" rch_result rch_ndi_sender_create(
     sender->running.store(false, std::memory_order_release);
     sender->state.store(RCH_NDI_SENDER_STATE_STOPPED, std::memory_order_release);
     sender->last_result.store(RCH_RESULT_OK, std::memory_order_release);
+#if defined(RCH_HAS_NDI_SDK)
+    sender->backend.context = robocamhub::ndi::CreateOfficialSenderBackend(sender->sender_name.c_str());
+    if (sender->backend.context == nullptr) {
+      delete sender;
+      return RCH_RESULT_INTERNAL_ERROR;
+    }
+    sender->backend.send = robocamhub::ndi::SendOfficialFrame;
+    sender->backend.destroy = robocamhub::ndi::DestroyOfficialSenderBackend;
+    sender->backend.is_official_sdk = true;
+#else
     sender->backend.send = DeterministicSenderBackendSend;
     sender->backend.is_official_sdk = false;
+#endif
     view->state->output_consumer_count.fetch_add(1U, std::memory_order_acq_rel);
     *out_sender = sender;
     return RCH_RESULT_OK;
@@ -521,6 +537,11 @@ extern "C" rch_result rch_ndi_sender_destroy(
     sender->stop_requested.store(true, std::memory_order_release);
     if (sender->worker.joinable()) {
       sender->worker.join();
+    }
+
+    if (sender->backend.destroy != nullptr) {
+      sender->backend.destroy(sender->backend.context);
+      sender->backend.context = nullptr;
     }
 
     if (auto view = sender->view.lock(); view != nullptr) {

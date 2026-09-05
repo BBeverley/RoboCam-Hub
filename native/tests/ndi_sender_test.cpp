@@ -364,7 +364,7 @@ int main()
   bool observed_sequence = false;
   bool observed_sender_activity = false;
   bool observed_counter_relationships = false;
-  bool observed_receiver_unknown = false;
+  bool observed_receiver_diagnostics = false;
   for (int iteration = 0; iteration < 100; ++iteration) {
     bool view_ok = false;
     const auto view_status = QueryViewStatus(view, view_ok);
@@ -385,16 +385,20 @@ int main()
         && sender_status.unique_sequence_observed_count >= sender_status.sent_frame_count) {
       observed_counter_relationships = true;
     }
-    if (sender_result == RCH_RESULT_OK
+    if (sender_result == RCH_RESULT_OK) {
+      const bool official_sdk_diagnostics = sender_status.reserved_v2 != 0U
+        && sender_status.sent_frame_count > 0U
+        && sender_status.receiver_count_known == 1U;
+      const bool deterministic_diagnostics = sender_status.reserved_v2 == 0U
         && sender_status.receiver_count_known == 0U
-        && sender_status.receiver_count == 0U) {
-      observed_receiver_unknown = true;
+        && sender_status.receiver_count == 0U;
+      observed_receiver_diagnostics = official_sdk_diagnostics || deterministic_diagnostics;
     }
 
     if (observed_sequence
         && observed_sender_activity
         && observed_counter_relationships
-        && observed_receiver_unknown) {
+        && observed_receiver_diagnostics) {
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(15));
@@ -406,8 +410,8 @@ int main()
        "sender status must observe sending or waiting-for-frame while active")
         || !Expect(observed_counter_relationships,
        "worker tick and unique sequence counters must stay internally consistent")
-        || !Expect(observed_receiver_unknown,
-       "deterministic sender backend must not claim a receiver count")) {
+        || !Expect(observed_receiver_diagnostics,
+       "sender backend must report receiver diagnostics according to its capability")) {
     rch_ndi_sender_stop(sender);
     rch_ndi_sender_destroy(sender);
     rch_view_destroy(view);

@@ -56,6 +56,11 @@ Gate 1A requires the official GStreamer runtime and development SDK. See
 [`docs/23-gate-1a-real-camera-test.md`](docs/23-gate-1a-real-camera-test.md) for
 the pinned CI dependency strategy and the deferred RoboSpot camera procedure.
 
+Gate 4A can additionally use an externally installed official NDI SDK. The SDK
+is optional for deterministic CI and must not be committed or redistributed by
+this repository. See [`docs/07-ndi-output.md`](docs/07-ndi-output.md) for SDK
+discovery, the direct RGBA frame path, and the real sender probe.
+
 ## Build and test
 
 Validation requires the .NET 10 SDK, CMake 3.25 or newer, a C/C++ toolchain and

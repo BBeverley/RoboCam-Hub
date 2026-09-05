@@ -11,6 +11,7 @@ include(CTest)
 
 option(RCH_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(RCH_BUILD_INGEST_PROBE "Build the manual single-camera diagnostics probe" ON)
+option(RCH_BUILD_NDI_PROBE "Build the manual four-camera NDI sender diagnostics probe" ON)
 option(RCH_ENABLE_NDI_SDK "Enable official NDI SDK backend when discoverable" ON)
 set(RCH_NDI_SDK_ROOT "" CACHE PATH "Root folder of an installed official NDI SDK")
 
@@ -55,6 +56,7 @@ add_library(robocamhub_native SHARED
   src/engine/robocamhub_native.cpp
   src/frames/latest_frame.cpp
   src/ingest/single_camera_ingest.cpp
+  src/ndi/ndi_sender_backend.cpp
 )
 
 target_compile_features(robocamhub_native PRIVATE cxx_std_20)
@@ -77,8 +79,14 @@ if(RCH_ENABLE_NDI_SDK)
   if(DEFINED ENV{NDI_SDK_ROOT})
     list(APPEND _rch_ndi_hints "$ENV{NDI_SDK_ROOT}")
   endif()
+  if(DEFINED ENV{NDI_SDK_DIR})
+    list(APPEND _rch_ndi_hints "$ENV{NDI_SDK_DIR}")
+  endif()
   if(DEFINED ENV{NDI_INSTALL_DIR})
     list(APPEND _rch_ndi_hints "$ENV{NDI_INSTALL_DIR}")
+  endif()
+  if(APPLE AND IS_DIRECTORY "/Library/NDI SDK for Apple")
+    list(APPEND _rch_ndi_hints "/Library/NDI SDK for Apple")
   endif()
 
   find_path(
@@ -89,9 +97,9 @@ if(RCH_ENABLE_NDI_SDK)
   )
   find_library(
     RCH_NDI_SDK_LIBRARY
-    NAMES NDIlib_v6 NDIlib_v5 ndi
+    NAMES NDIlib_v6 NDIlib_v5 Processing.NDI.Lib.x64 Processing.NDI.Lib.x86 ndi
     HINTS ${_rch_ndi_hints}
-    PATH_SUFFIXES Lib lib Bin bin
+    PATH_SUFFIXES Lib lib Bin bin Lib/macOS lib/macOS Lib/x64 lib/x64 Bin/x64 bin/x64
   )
 
   if(RCH_NDI_SDK_INCLUDE_DIR AND RCH_NDI_SDK_LIBRARY)
@@ -100,9 +108,10 @@ if(RCH_ENABLE_NDI_SDK)
     target_include_directories(robocamhub_native PRIVATE "${RCH_NDI_SDK_INCLUDE_DIR}")
     target_link_libraries(robocamhub_native PRIVATE "${RCH_NDI_SDK_LIBRARY}")
     message(STATUS "Official NDI SDK detected: ${RCH_NDI_SDK_INCLUDE_DIR}")
+    message(STATUS "Official NDI SDK library: ${RCH_NDI_SDK_LIBRARY}")
   else()
     message(STATUS "Official NDI SDK not found. Deterministic sender-core backend remains active.")
-    message(STATUS "Set RCH_NDI_SDK_ROOT (or env NDI_SDK_ROOT / NDI_INSTALL_DIR) to an installed SDK root containing Processing.NDI.Lib.h and NDI library binaries.")
+    message(STATUS "Set RCH_NDI_SDK_ROOT (or env NDI_SDK_ROOT / NDI_SDK_DIR / NDI_INSTALL_DIR) to an installed SDK root containing Processing.NDI.Lib.h and NDI library binaries.")
   endif()
 endif()
 
@@ -128,6 +137,14 @@ if(RCH_BUILD_INGEST_PROBE)
   target_link_libraries(robocamhub_ingest_probe PRIVATE robocamhub_native)
   set_target_properties(robocamhub_ingest_probe PROPERTIES CXX_EXTENSIONS OFF)
   rch_enable_project_warnings(robocamhub_ingest_probe)
+endif()
+
+if(RCH_BUILD_NDI_PROBE)
+  add_executable(robocamhub_ndi_sender_probe tools/ndi_sender_probe.cpp)
+  target_compile_features(robocamhub_ndi_sender_probe PRIVATE cxx_std_20)
+  target_link_libraries(robocamhub_ndi_sender_probe PRIVATE robocamhub_native)
+  set_target_properties(robocamhub_ndi_sender_probe PROPERTIES CXX_EXTENSIONS OFF)
+  rch_enable_project_warnings(robocamhub_ndi_sender_probe)
 endif()
 
 if(BUILD_TESTING)

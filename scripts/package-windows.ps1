@@ -39,13 +39,13 @@ $scanner = $scannerCandidates | Where-Object { Test-Path $_ } | Select-Object -F
 if (-not $scanner) { throw "GStreamer plugin scanner was not found below $gstRoot." }
 Copy-Item $scanner (Join-Path $OutputRoot "gstreamer-1.0\gst-plugin-scanner.exe")
 Copy-Item (Join-Path $repoRoot "scripts\packaging\THIRD-PARTY-NOTICES.md") $OutputRoot
+Copy-Item (Join-Path $repoRoot "scripts\packaging\LGPL-2.1.txt") (Join-Path $OutputRoot "licenses")
 $license = @(
     (Join-Path $gstRoot "share\gstreamer-1.0\LICENSE"),
     (Join-Path $gstRoot "COPYING"),
     (Join-Path $gstRoot "LICENSE")
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $license) { throw "The GStreamer redistribution license was not found below $gstRoot." }
-Copy-Item $license (Join-Path $OutputRoot "licenses\GStreamer-LICENSE")
+if ($license) { Copy-Item $license (Join-Path $OutputRoot "licenses\GStreamer-LICENSE") }
 
 & (Join-Path $repoRoot "scripts\verify-package.ps1") $OutputRoot
 Write-Host "Created $OutputRoot"

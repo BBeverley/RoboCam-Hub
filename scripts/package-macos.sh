@@ -114,16 +114,13 @@ done
 
 cp "$repo_root/scripts/packaging/Info.plist" "$app/Contents/Info.plist"
 cp "$repo_root/scripts/packaging/THIRD-PARTY-NOTICES.md" "$app/Contents/Resources/"
+cp "$repo_root/scripts/packaging/LGPL-2.1.txt" "$app/Contents/Resources/licenses/"
 for license in "$gst_root/share/gstreamer-1.0/LICENSE" "$gst_root/COPYING" "$gst_root/LICENSE"; do
   if [[ -f "$license" ]]; then
     cp "$license" "$app/Contents/Resources/licenses/GStreamer-LICENSE"
     break
   fi
 done
-[[ -f "$app/Contents/Resources/licenses/GStreamer-LICENSE" ]] || {
-  echo "The GStreamer redistribution license was not found below $gst_root." >&2; exit 1;
-}
-
 codesign --force --deep --sign - "$app"
 "$repo_root/scripts/verify-package.sh" "$app"
 echo "Created $app"

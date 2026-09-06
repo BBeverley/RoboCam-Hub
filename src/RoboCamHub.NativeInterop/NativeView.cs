@@ -26,6 +26,74 @@ public sealed class NativeView : IDisposable
     public NativeResult UnbindSource(uint slotIndex)
         => NativeMethods.ViewUnbindSource(GetHandleOrThrow(), ValidateSlot(slotIndex));
 
+    public unsafe NativeResult ApplyCameraScene(IReadOnlyList<NativeCameraElementConfig> elements)
+    {
+        ArgumentNullException.ThrowIfNull(elements);
+        if (elements.Count > 256)
+        {
+            throw new ArgumentOutOfRangeException(nameof(elements));
+        }
+
+        if (elements.Count == 0)
+        {
+            return NativeMethods.ViewApplyCameraScene(GetHandleOrThrow(), null, 0);
+        }
+
+        var nativeElements = new NativeCameraElementConfigV1[elements.Count];
+        var allocatedStrings = new List<nint>(elements.Count * 2);
+        try
+        {
+            for (var index = 0; index < elements.Count; index++)
+            {
+                var element = elements[index];
+                var elementId = Marshal.StringToCoTaskMemUTF8(
+                    ValidateText(element.ElementId, nameof(elements), "Scene element ID"));
+                allocatedStrings.Add(elementId);
+                var cameraId = Marshal.StringToCoTaskMemUTF8(
+                    ValidateText(element.CameraId, nameof(elements), "Camera ID"));
+                allocatedStrings.Add(cameraId);
+
+                nativeElements[index] = new NativeCameraElementConfigV1
+                {
+                    struct_size = (uint)Marshal.SizeOf<NativeCameraElementConfigV1>(),
+                    struct_version = NativeMethods.ViewCameraElementVersion,
+                    element_id_utf8 = (byte*)elementId,
+                    camera_id_utf8 = (byte*)cameraId,
+                    x = element.X,
+                    y = element.Y,
+                    width = element.Width,
+                    height = element.Height,
+                    crop_left = element.CropLeft,
+                    crop_top = element.CropTop,
+                    crop_right = element.CropRight,
+                    crop_bottom = element.CropBottom,
+                    rotation_degrees = element.RotationDegrees,
+                    z_order = element.ZOrder,
+                    fit_mode = element.FitMode,
+                    flip_horizontal = element.FlipHorizontal ? 1U : 0U,
+                    flip_vertical = element.FlipVertical ? 1U : 0U,
+                    visible = element.Visible ? 1U : 0U,
+                    enabled = element.Enabled ? 1U : 0U,
+                };
+            }
+
+            fixed (NativeCameraElementConfigV1* nativeElementsPointer = nativeElements)
+            {
+                return NativeMethods.ViewApplyCameraScene(
+                    GetHandleOrThrow(),
+                    nativeElementsPointer,
+                    (uint)nativeElements.Length);
+            }
+        }
+        finally
+        {
+            foreach (var pointer in allocatedStrings)
+            {
+                Marshal.FreeCoTaskMem(pointer);
+            }
+        }
+    }
+
     public NativeResult TryGetStatus(out NativeViewStatus status)
     {
         var nativeStatus = new NativeViewStatusV1

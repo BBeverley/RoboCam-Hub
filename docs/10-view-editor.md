@@ -10,6 +10,13 @@ The editor should feel familiar to users of OBS Studio: a free-form canvas where
 
 A View is a free-form canvas.
 
+Gate 6A establishes the underlying scene/transform contract without adding the
+editor controls described below. Its canonical coordinates are normalized to
+the View, crop is normalized to the source, and element rotation is clockwise
+about the element centre. Existing fixed 2×2 definitions migrate to four stable
+legacy camera elements. See
+`docs/28-gate-6a-view-scene-transform-foundation.md`.
+
 Users may start from:
 
 - a blank canvas;

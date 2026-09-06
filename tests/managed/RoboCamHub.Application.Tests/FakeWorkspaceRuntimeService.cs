@@ -132,6 +132,25 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         return Task.CompletedTask;
     }
 
+    public Task ApplyViewSceneAsync(
+        string viewId,
+        IReadOnlyList<ViewSceneElementDefinition> elements,
+        CancellationToken cancellationToken = default)
+    {
+        var index = _views.FindIndex(view => view.Id == viewId);
+        if (index < 0)
+        {
+            throw new KeyNotFoundException($"View '{viewId}' is not part of this workspace.");
+        }
+        foreach (var cameraElement in elements.Cast<CameraElementDefinition>())
+        {
+            _ = _cameras.Single(camera => camera.Id == cameraElement.CameraId);
+        }
+        var current = _views[index];
+        _views[index] = new ViewDefinition(current.Id, current.Name, elements);
+        return Task.CompletedTask;
+    }
+
     public async Task BindCameraSourceAsync(
         string viewId,
         uint slotIndex,

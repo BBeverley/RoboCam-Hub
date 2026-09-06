@@ -102,6 +102,11 @@ create ShowRuntime
 > application restriction with stable-ID collections while preserving this
 > document's ownership and dependency-order rules. See
 > `docs/27-gate-5d-multiple-views-outputs.md`.
+>
+> Gate 6A supersedes the fixed four-slot definition as the compositor model
+> with an extensible ordered scene. The four-slot API remains a compatibility
+> projection for the Gate 5 workspace. See
+> `docs/28-gate-6a-view-scene-transform-foundation.md`.
 
 Gate 5A intentionally supports only the current spike surface:
 

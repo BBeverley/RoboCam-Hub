@@ -73,6 +73,81 @@ public sealed class ShowRuntimeTests
     }
 
     [Fact]
+    public void ExplicitSceneIsAppliedThroughRuntimeWithoutCreatingCameraOwnership()
+    {
+        var factory = new RecordingNativeRuntimeFactory();
+        using var show = ShowRuntime.Create(factory);
+        var camera = show.AddCamera(Camera("camera-1"));
+        camera.Start();
+        var definition = new ViewDefinition(
+            "view-scene",
+            "Freeform",
+            new ViewSceneElementDefinition[]
+            {
+                new CameraElementDefinition("large", "camera-1", 0, 0, 0.75, 1, zOrder: 0),
+                new CameraElementDefinition(
+                    "inset",
+                    "camera-1",
+                    0.7,
+                    0.05,
+                    0.25,
+                    0.25,
+                    zOrder: 10,
+                    cropLeft: 0.1,
+                    rotationDegrees: 15,
+                    flipHorizontal: true),
+            });
+
+        var view = show.AddView(definition);
+        view.ApplyScene(definition.SceneElements.Reverse().ToArray());
+        var diagnostics = show.GetDiagnostics();
+
+        Assert.NotSame(definition, view.Definition);
+        Assert.Equal(
+            new[] { "inset", "large" },
+            view.Definition.SceneElements.Select(element => element.Id));
+        Assert.Equal((uint)2, view.GetStatus().BoundSourceCount);
+        Assert.Equal((uint)1, diagnostics.ConfiguredCameraCount);
+        Assert.Equal((uint)1, diagnostics.ActiveRtspSessionTotal);
+        Assert.Equal((uint)1, diagnostics.ActiveDecoderTotal);
+        Assert.Equal((uint)1, diagnostics.ViewCount);
+        Assert.Equal((uint)2, diagnostics.TotalBoundViewSourceCount);
+        Assert.Equal(2, factory.Events.Count(item => item == "view:apply-scene:view-scene:2"));
+        Assert.DoesNotContain(factory.Events, item => item.StartsWith("view:bind:view-scene", StringComparison.Ordinal));
+
+        var appliedDefinition = view.Definition;
+        Assert.Throws<ArgumentException>(() => view.ApplyScene(
+            new ViewSceneElementDefinition[]
+            {
+                appliedDefinition.SceneElements[0],
+                appliedDefinition.SceneElements[0],
+            }));
+        Assert.Same(appliedDefinition, view.Definition);
+        Assert.Equal(2, factory.Events.Count(item => item == "view:apply-scene:view-scene:2"));
+    }
+
+    [Fact]
+    public void ExplicitSceneMissingCameraFailsBeforeNativeViewCreationOrApply()
+    {
+        var factory = new RecordingNativeRuntimeFactory();
+        using var show = ShowRuntime.Create(factory);
+        var definition = new ViewDefinition(
+            "view-missing-scene",
+            "Missing",
+            new ViewSceneElementDefinition[]
+            {
+                new CameraElementDefinition("missing-element", "missing-camera", 0, 0, 1, 1),
+            });
+
+        var error = Assert.Throws<RuntimeReferenceException>(() => show.AddView(definition));
+
+        Assert.Contains("missing-element", error.Message, StringComparison.Ordinal);
+        Assert.Contains("missing-camera", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(factory.Events, item => item.StartsWith("view:create", StringComparison.Ordinal));
+        Assert.DoesNotContain(factory.Events, item => item.StartsWith("view:apply-scene", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void OutputRuntimeResolvesViewAndControlsSenderWithoutPublicNativeHandles()
     {
         var factory = new RecordingNativeRuntimeFactory();

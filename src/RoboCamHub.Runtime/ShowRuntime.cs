@@ -68,13 +68,33 @@ public sealed class ShowRuntime : IDisposable
             throw new InvalidOperationException($"A View runtime with ID '{definition.Id}' already exists.");
         }
 
-        for (var slotIndex = 0; slotIndex < ViewDefinition.SlotCount; slotIndex++)
+        if (definition.IsLegacyFourSlotLayout)
         {
-            var cameraId = definition.GetCameraId(slotIndex);
-            if (cameraId is not null && !_cameras.ContainsKey(cameraId))
+            for (var slotIndex = 0; slotIndex < ViewDefinition.SlotCount; slotIndex++)
             {
-                throw new RuntimeReferenceException(
-                    $"View '{definition.Id}' slot {slotIndex} references missing camera '{cameraId}'.");
+                var cameraId = definition.GetCameraId(slotIndex);
+                if (cameraId is not null && !_cameras.ContainsKey(cameraId))
+                {
+                    throw new RuntimeReferenceException(
+                        $"View '{definition.Id}' slot {slotIndex} references missing camera '{cameraId}'.");
+                }
+            }
+        }
+        else
+        {
+            foreach (var element in definition.SceneElements)
+            {
+                if (element is not CameraElementDefinition cameraElement)
+                {
+                    throw new NotSupportedException(
+                        $"Scene element type '{element.GetType().Name}' is not supported by Gate 6A.");
+                }
+
+                if (!_cameras.ContainsKey(cameraElement.CameraId))
+                {
+                    throw new RuntimeReferenceException(
+                        $"View '{definition.Id}' element '{element.Id}' references missing camera '{cameraElement.CameraId}'.");
+                }
             }
         }
 
@@ -88,15 +108,28 @@ public sealed class ShowRuntime : IDisposable
 
         try
         {
-            for (var slotIndex = 0; slotIndex < ViewDefinition.SlotCount; slotIndex++)
+            if (definition.IsLegacyFourSlotLayout)
             {
-                var cameraId = definition.GetCameraId(slotIndex);
-                if (cameraId is not null)
+                for (var slotIndex = 0; slotIndex < ViewDefinition.SlotCount; slotIndex++)
                 {
-                    RuntimeGuard.EnsureSuccess(
-                        $"Binding View '{definition.Id}' slot {slotIndex} to camera '{cameraId}'",
-                        nativeView.BindCameraSource((uint)slotIndex, cameraId));
+                    var cameraId = definition.GetCameraId(slotIndex);
+                    if (cameraId is not null)
+                    {
+                        RuntimeGuard.EnsureSuccess(
+                            $"Binding View '{definition.Id}' slot {slotIndex} to camera '{cameraId}'",
+                            nativeView.BindCameraSource((uint)slotIndex, cameraId));
+                    }
                 }
+            }
+            else
+            {
+                RuntimeGuard.EnsureSuccess(
+                    $"Applying View '{definition.Id}' scene",
+                    nativeView.ApplyCameraScene(
+                        definition.SceneElements
+                            .Cast<CameraElementDefinition>()
+                            .Select(ViewRuntime.ToNative)
+                            .ToArray()));
             }
 
             var runtime = new ViewRuntime(this, nativeView, definition);

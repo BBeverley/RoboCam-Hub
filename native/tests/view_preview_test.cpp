@@ -143,6 +143,39 @@ bool TestOwnershipAndRepeatedAttachDetach()
     return false;
   }
 
+  const rch_camera_config_v1 camera_config{
+    sizeof(rch_camera_config_v1),
+    RCH_CAMERA_CONFIG_VERSION,
+    "preview-transform-camera",
+    "rtsp://127.0.0.1:1/profile2/media.smp",
+    250U,
+    0U,
+  };
+  rch_view_camera_element_v1 element{};
+  element.struct_size = sizeof(element);
+  element.struct_version = RCH_VIEW_CAMERA_ELEMENT_VERSION;
+  element.element_id_utf8 = "preview-transform-element";
+  element.camera_id_utf8 = camera_config.camera_id_utf8;
+  element.x = 0.15;
+  element.y = 0.2;
+  element.width = 0.6;
+  element.height = 0.5;
+  element.crop_left = 0.1;
+  element.rotation_degrees = 15.0;
+  element.fit_mode = RCH_VIEW_CAMERA_FIT_COVER;
+  element.flip_horizontal = 1U;
+  element.visible = 1U;
+  element.enabled = 1U;
+  if (!Expect(rch_camera_add(engine, &camera_config) == RCH_RESULT_OK,
+              "preview transformed camera configuration")
+      || !Expect(rch_view_apply_camera_scene(view, &element, 1U) == RCH_RESULT_OK,
+                 "preview transformed scene apply")) {
+    rch_ndi_sender_destroy(sender);
+    rch_view_destroy(view);
+    rch_engine_destroy(engine);
+    return false;
+  }
+
   bool before_engine_ok = false;
   bool before_view_ok = false;
   const auto before_engine = EngineStatus(engine, before_engine_ok);
@@ -216,7 +249,20 @@ bool TestSlowPreviewAndSurfaceLifecycle()
   const auto preview_before = PreviewStatus(preview, preview_before_ok);
   const auto sender_before = SenderStatus(sender, sender_before_ok);
   robocamhub::testing::RequestPreviewSurfaceRecreation();
-  std::this_thread::sleep_for(std::chrono::milliseconds(650));
+  const bool progressed = WaitUntil([&] {
+    bool view_ok = false;
+    bool preview_ok = false;
+    bool sender_ok = false;
+    const auto current_view = ViewStatus(view, view_ok);
+    const auto current_preview = PreviewStatus(preview, preview_ok);
+    const auto current_sender = SenderStatus(sender, sender_ok);
+    return view_ok && preview_ok && sender_ok
+      && current_view.latest_composed_frame_sequence
+        > view_before.latest_composed_frame_sequence + 5U
+      && current_sender.latest_sent_sequence > sender_before.latest_sent_sequence + 5U
+      && current_preview.presented_frame_count > preview_before.presented_frame_count + 1U
+      && current_preview.surface_recreate_count > preview_before.surface_recreate_count;
+  }, std::chrono::seconds(4));
   bool view_after_ok = false;
   bool preview_after_ok = false;
   bool sender_after_ok = false;
@@ -225,7 +271,7 @@ bool TestSlowPreviewAndSurfaceLifecycle()
   const auto sender_after = SenderStatus(sender, sender_after_ok);
 
   const bool passed =
-    Expect(warmed && view_before_ok && preview_before_ok && sender_before_ok
+    Expect(warmed && progressed && view_before_ok && preview_before_ok && sender_before_ok
              && view_after_ok && preview_after_ok && sender_after_ok,
            "slow preview diagnostics must become available")
     && Expect(view_after.latest_composed_frame_sequence

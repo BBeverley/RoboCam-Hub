@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #define RCH_ABI_VERSION_MAJOR UINT32_C(1)
-#define RCH_ABI_VERSION_MINOR UINT32_C(8)
+#define RCH_ABI_VERSION_MINOR UINT32_C(9)
 #define RCH_ABI_VERSION ((RCH_ABI_VERSION_MAJOR << 16U) | RCH_ABI_VERSION_MINOR)
 
 #define RCH_CAMERA_CONFIG_VERSION UINT32_C(1)
@@ -51,7 +51,10 @@ extern "C" {
 #define RCH_VIEW_PREVIEW_CONFIG_VERSION RCH_VIEW_PREVIEW_CONFIG_VERSION_V1
 #define RCH_VIEW_PREVIEW_STATUS_VERSION_V1 UINT32_C(1)
 #define RCH_VIEW_PREVIEW_STATUS_VERSION RCH_VIEW_PREVIEW_STATUS_VERSION_V1
+#define RCH_VIEW_CAMERA_ELEMENT_VERSION_V1 UINT32_C(1)
+#define RCH_VIEW_CAMERA_ELEMENT_VERSION RCH_VIEW_CAMERA_ELEMENT_VERSION_V1
 #define RCH_VIEW_MAX_SOURCE_SLOTS UINT32_C(16)
+#define RCH_VIEW_MAX_SCENE_ELEMENTS UINT32_C(256)
 #define RCH_NO_FRAME_AGE_MS UINT64_MAX
 
 /* Fixed-width result type with stable named error-code constants. */
@@ -103,6 +106,43 @@ enum rch_view_source_state_code {
   RCH_VIEW_SOURCE_STATE_RECONNECTING = 4,
   RCH_VIEW_SOURCE_STATE_MISSING_OR_STALE = 5
 };
+
+typedef uint32_t rch_view_camera_fit_mode;
+
+enum rch_view_camera_fit_mode_code {
+  RCH_VIEW_CAMERA_FIT_STRETCH = 0,
+  RCH_VIEW_CAMERA_FIT_CONTAIN = 1,
+  RCH_VIEW_CAMERA_FIT_COVER = 2
+};
+
+/* One camera element in an ordered View scene. Geometry and crop are
+ * normalized View/source coordinates: (0,0,1,1) fills the canvas and crop
+ * values are fractions removed from the corresponding source edge. X/Y may
+ * be negative for intentional off-canvas placement. Rotation is clockwise in
+ * degrees about the element centre. Strings and the array are borrowed only
+ * for the duration of rch_view_apply_camera_scene. */
+typedef struct rch_view_camera_element_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  const char* element_id_utf8;
+  const char* camera_id_utf8;
+  double x;
+  double y;
+  double width;
+  double height;
+  double crop_left;
+  double crop_top;
+  double crop_right;
+  double crop_bottom;
+  double rotation_degrees;
+  int32_t z_order;
+  rch_view_camera_fit_mode fit_mode;
+  uint32_t flip_horizontal;
+  uint32_t flip_vertical;
+  uint32_t visible;
+  uint32_t enabled;
+  uint32_t reserved[4];
+} rch_view_camera_element_v1;
 
 /* The UTF-8 strings are borrowed only for the duration of
  * rch_camera_configure. Strings are NUL-terminated, nonempty UTF-8 (ID <=255
@@ -485,6 +525,16 @@ RCH_API rch_result rch_view_bind_camera_source(
 RCH_API rch_result rch_view_unbind_source(
   rch_view_handle view,
   uint32_t slot_index) RCH_NOEXCEPT;
+
+/* Validates and atomically replaces the complete camera-element scene. The
+ * previous scene remains active if any element is invalid or references an
+ * unknown logical camera. Elements render by ascending z_order, with UTF-8
+ * element ID as a deterministic tie-breaker. A zero count applies a blank
+ * scene and permits elements to be null. */
+RCH_API rch_result rch_view_apply_camera_scene(
+  rch_view_handle view,
+  const rch_view_camera_element_v1* elements,
+  uint32_t element_count) RCH_NOEXCEPT;
 
 /* Returns point-in-time View/source diagnostics. */
 RCH_API rch_result rch_view_get_status(

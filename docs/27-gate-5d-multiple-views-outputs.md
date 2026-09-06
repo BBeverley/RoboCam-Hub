@@ -198,3 +198,7 @@ Local validation artifacts are preserved in `/tmp`:
   deferred.
 - The UI remains the fixed 2×2 operational workspace. Freeform composition,
   persistence, scaling and final visual polish belong to later gates.
+
+Gate 6A subsequently adds the freeform camera scene/transform foundation behind
+that unchanged fixed-slot workspace. See
+`docs/28-gate-6a-view-scene-transform-foundation.md`.

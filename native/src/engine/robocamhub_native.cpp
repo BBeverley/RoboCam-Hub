@@ -11,6 +11,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <deque>
@@ -23,6 +24,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -87,20 +89,27 @@ struct EngineRegistry final {
   std::atomic<bool> shutting_down{false};
 };
 
-struct ViewSourceBinding final {
+struct ViewCameraElement final {
+  std::string element_id;
   std::string camera_id;
   std::weak_ptr<CameraEntry> camera;
-  std::uint64_t last_observed_sequence{0};
-};
-
-struct ViewSlotFreezeCache final {
-  std::string camera_id;
-  std::vector<std::uint8_t> rgba;
-  std::uint64_t last_sequence{0};
-  bool has_frame{false};
-};
-
-struct ViewSlotDiagnostics final {
+  double x{0.0};
+  double y{0.0};
+  double width{1.0};
+  double height{1.0};
+  double crop_left{0.0};
+  double crop_top{0.0};
+  double crop_right{0.0};
+  double crop_bottom{0.0};
+  double rotation_degrees{0.0};
+  std::int32_t z_order{0};
+  rch_view_camera_fit_mode fit_mode{RCH_VIEW_CAMERA_FIT_STRETCH};
+  bool flip_horizontal{false};
+  bool flip_vertical{false};
+  bool visible{true};
+  bool enabled{true};
+  std::mutex last_good_mutex;
+  robocamhub::frames::LatestFrameLease last_good_frame{};
   std::atomic<std::uint32_t> source_state{RCH_VIEW_SOURCE_STATE_UNBOUND};
   std::atomic<std::uint64_t> latest_sequence{0};
   std::atomic<std::uint8_t> freeze_cache_has_frame{0};
@@ -135,8 +144,8 @@ constexpr std::size_t kGate3BViewSourceSlots = 4;
 constexpr std::size_t kViewComposedStride = static_cast<std::size_t>(kViewComposedWidth) * 4U;
 constexpr std::size_t kQuadrantWidth = kViewComposedWidth / 2U;
 constexpr std::size_t kQuadrantHeight = kViewComposedHeight / 2U;
-constexpr std::size_t kQuadrantStride = kQuadrantWidth * 4U;
-constexpr std::size_t kQuadrantPixels = kQuadrantWidth * kQuadrantHeight * 4U;
+constexpr double kMaximumNormalizedMagnitude = 16.0;
+constexpr std::int32_t kMaximumZOrderMagnitude = 1000000;
 
 static_assert(kGate3BViewSourceSlots <= RCH_VIEW_MAX_SOURCE_SLOTS,
               "fixed compositor slot count must not exceed ABI slot ceiling");
@@ -157,14 +166,6 @@ struct ViewState final {
       "height", G_TYPE_INT, static_cast<int>(kViewComposedHeight),
       nullptr);
     composed_pixels.resize(static_cast<std::size_t>(kViewComposedHeight) * kViewComposedStride, 0U);
-    for (auto& cache : slot_freeze_cache) {
-      cache.rgba.resize(kQuadrantPixels, 0U);
-    }
-    for (auto& slot : slot_diagnostics) {
-      slot.source_state.store(RCH_VIEW_SOURCE_STATE_UNBOUND, std::memory_order_release);
-      slot.latest_sequence.store(0, std::memory_order_release);
-      slot.freeze_cache_has_frame.store(0, std::memory_order_release);
-    }
   }
 
   ~ViewState()
@@ -183,9 +184,8 @@ struct ViewState final {
   std::shared_ptr<EngineRegistry> registry;
   std::string view_id;
   std::mutex mutex;
-  std::array<std::optional<ViewSourceBinding>, RCH_VIEW_MAX_SOURCE_SLOTS> sources{};
-  std::array<ViewSlotFreezeCache, kGate3BViewSourceSlots> slot_freeze_cache{};
-  std::array<ViewSlotDiagnostics, kGate3BViewSourceSlots> slot_diagnostics{};
+  std::vector<std::shared_ptr<ViewCameraElement>> scene_elements;
+  bool legacy_four_slot_layout{true};
   std::vector<std::uint8_t> composed_pixels;
   GstCaps* composed_caps{nullptr};
   robocamhub::frames::LatestFrame latest_composed_frame;
@@ -976,23 +976,24 @@ void DecrementIfPositive(std::atomic<std::uint32_t>& counter)
   }
 }
 
-void ReleaseViewBinding(std::optional<ViewSourceBinding>& binding)
+void ReleaseViewElement(const std::shared_ptr<ViewCameraElement>& element)
 {
-  if (!binding.has_value()) {
+  if (element == nullptr) {
     return;
   }
 
-  if (auto camera = binding->camera.lock(); camera != nullptr) {
+  if (auto camera = element->camera.lock(); camera != nullptr) {
     DecrementIfPositive(camera->view_binding_count);
   }
-  binding.reset();
 }
 
 void ReleaseAllViewBindings(ViewState& state)
 {
+  std::vector<std::shared_ptr<ViewCameraElement>> elements;
   std::lock_guard lock(state.mutex);
-  for (auto& binding : state.sources) {
-    ReleaseViewBinding(binding);
+  elements.swap(state.scene_elements);
+  for (const auto& element : elements) {
+    ReleaseViewElement(element);
   }
 }
 
@@ -1025,24 +1026,203 @@ void FillQuadrantPlaceholder(std::vector<std::uint8_t>& output,
   }
 }
 
-void BlitQuadrantFromCache(const ViewSlotFreezeCache& cache,
-                           std::vector<std::uint8_t>& output,
-                           std::size_t slot_index)
+bool IsLegacySlotElementId(const std::string& element_id, std::size_t& slot_index)
 {
-  const std::size_t origin_x = (slot_index % 2U) * kQuadrantWidth;
-  const std::size_t origin_y = (slot_index / 2U) * kQuadrantHeight;
-  for (std::size_t y = 0; y < kQuadrantHeight; ++y) {
-    auto* dst = output.data() + (origin_y + y) * kViewComposedStride + origin_x * 4U;
-    const auto* src = cache.rgba.data() + y * kQuadrantStride;
-    std::memcpy(dst, src, kQuadrantStride);
+  constexpr const char* prefix = "legacy-slot-";
+  constexpr std::size_t prefix_length = 12U;
+  if (element_id.size() != prefix_length + 1U
+      || element_id.compare(0, prefix_length, prefix) != 0
+      || element_id[prefix_length] < '0'
+      || element_id[prefix_length] > '3') {
+    return false;
+  }
+  slot_index = static_cast<std::size_t>(element_id[prefix_length] - '0');
+  return true;
+}
+
+std::shared_ptr<ViewCameraElement> MakeLegacySlotElement(
+  std::size_t slot_index,
+  const std::string& camera_id,
+  const std::shared_ptr<CameraEntry>& camera)
+{
+  auto element = std::make_shared<ViewCameraElement>();
+  element->element_id = "legacy-slot-" + std::to_string(slot_index);
+  element->camera_id = camera_id;
+  element->camera = camera;
+  element->x = static_cast<double>(slot_index % 2U) * 0.5;
+  element->y = static_cast<double>(slot_index / 2U) * 0.5;
+  element->width = 0.5;
+  element->height = 0.5;
+  element->z_order = static_cast<std::int32_t>(slot_index);
+  return element;
+}
+
+bool SceneElementOrder(
+  const std::shared_ptr<ViewCameraElement>& left,
+  const std::shared_ptr<ViewCameraElement>& right)
+{
+  if (left->z_order != right->z_order) {
+    return left->z_order < right->z_order;
+  }
+  return left->element_id < right->element_id;
+}
+
+bool IsBooleanValue(std::uint32_t value)
+{
+  return value == 0U || value == 1U;
+}
+
+bool IsValidCameraElement(const rch_view_camera_element_v1& element)
+{
+  if (element.struct_version != RCH_VIEW_CAMERA_ELEMENT_VERSION_V1
+      || element.struct_size < sizeof(rch_view_camera_element_v1)
+      || !IsValidCameraIdUtf8(element.element_id_utf8)
+      || !IsValidCameraIdUtf8(element.camera_id_utf8)) {
+    return false;
+  }
+  if (!std::isfinite(element.x) || !std::isfinite(element.y)
+      || !std::isfinite(element.width) || !std::isfinite(element.height)
+      || !std::isfinite(element.crop_left) || !std::isfinite(element.crop_top)
+      || !std::isfinite(element.crop_right) || !std::isfinite(element.crop_bottom)
+      || !std::isfinite(element.rotation_degrees)) {
+    return false;
+  }
+  if (std::abs(element.x) > kMaximumNormalizedMagnitude
+      || std::abs(element.y) > kMaximumNormalizedMagnitude
+      || element.width <= 0.0 || element.width > kMaximumNormalizedMagnitude
+      || element.height <= 0.0 || element.height > kMaximumNormalizedMagnitude
+      || element.z_order < -kMaximumZOrderMagnitude
+      || element.z_order > kMaximumZOrderMagnitude
+      || element.rotation_degrees < -360.0 || element.rotation_degrees > 360.0) {
+    return false;
+  }
+  if (element.crop_left < 0.0 || element.crop_left >= 1.0
+      || element.crop_top < 0.0 || element.crop_top >= 1.0
+      || element.crop_right < 0.0 || element.crop_right >= 1.0
+      || element.crop_bottom < 0.0 || element.crop_bottom >= 1.0
+      || element.crop_left + element.crop_right >= 1.0
+      || element.crop_top + element.crop_bottom >= 1.0) {
+    return false;
+  }
+  if (element.fit_mode != RCH_VIEW_CAMERA_FIT_STRETCH
+      && element.fit_mode != RCH_VIEW_CAMERA_FIT_CONTAIN
+      && element.fit_mode != RCH_VIEW_CAMERA_FIT_COVER) {
+    return false;
+  }
+  if (!IsBooleanValue(element.flip_horizontal)
+      || !IsBooleanValue(element.flip_vertical)
+      || !IsBooleanValue(element.visible)
+      || !IsBooleanValue(element.enabled)) {
+    return false;
+  }
+  return std::all_of(
+    std::begin(element.reserved),
+    std::end(element.reserved),
+    [](std::uint32_t value) { return value == 0U; });
+}
+
+std::shared_ptr<ViewCameraElement> MakeCameraElement(
+  const rch_view_camera_element_v1& config,
+  const std::shared_ptr<CameraEntry>& camera)
+{
+  auto element = std::make_shared<ViewCameraElement>();
+  element->element_id = config.element_id_utf8;
+  element->camera_id = config.camera_id_utf8;
+  element->camera = camera;
+  element->x = config.x;
+  element->y = config.y;
+  element->width = config.width;
+  element->height = config.height;
+  element->crop_left = config.crop_left;
+  element->crop_top = config.crop_top;
+  element->crop_right = config.crop_right;
+  element->crop_bottom = config.crop_bottom;
+  element->rotation_degrees = config.rotation_degrees == 360.0 || config.rotation_degrees == -360.0
+    ? 0.0
+    : config.rotation_degrees;
+  element->z_order = config.z_order;
+  element->fit_mode = config.fit_mode;
+  element->flip_horizontal = config.flip_horizontal != 0U;
+  element->flip_vertical = config.flip_vertical != 0U;
+  element->visible = config.visible != 0U;
+  element->enabled = config.enabled != 0U;
+  return element;
+}
+
+void ReplaceViewScene(
+  ViewState& state,
+  std::vector<std::shared_ptr<ViewCameraElement>> elements,
+  bool legacy_four_slot_layout)
+{
+  std::sort(elements.begin(), elements.end(), SceneElementOrder);
+  for (const auto& element : elements) {
+    if (auto camera = element->camera.lock(); camera != nullptr) {
+      camera->view_binding_count.fetch_add(1U, std::memory_order_acq_rel);
+    }
+  }
+
+  std::vector<std::shared_ptr<ViewCameraElement>> replaced;
+  {
+    std::lock_guard lock(state.mutex);
+    for (const auto& replacement : elements) {
+      const auto previous = std::find_if(
+        state.scene_elements.begin(),
+        state.scene_elements.end(),
+        [&replacement](const auto& candidate) {
+          return candidate != nullptr
+            && candidate->element_id == replacement->element_id
+            && candidate->camera_id == replacement->camera_id;
+        });
+      if (previous != state.scene_elements.end()) {
+        std::lock_guard frame_lock((*previous)->last_good_mutex);
+        replacement->last_good_frame = (*previous)->last_good_frame;
+        replacement->source_state.store(
+          (*previous)->source_state.load(std::memory_order_acquire),
+          std::memory_order_release);
+        replacement->latest_sequence.store(
+          (*previous)->latest_sequence.load(std::memory_order_acquire),
+          std::memory_order_release);
+        replacement->freeze_cache_has_frame.store(
+          (*previous)->freeze_cache_has_frame.load(std::memory_order_acquire),
+          std::memory_order_release);
+      }
+    }
+    replaced = std::move(state.scene_elements);
+    state.scene_elements = std::move(elements);
+    state.legacy_four_slot_layout = legacy_four_slot_layout;
+  }
+  for (const auto& element : replaced) {
+    ReleaseViewElement(element);
   }
 }
 
-bool CopyAndScaleRgbaToQuadrant(
+void BlendRgba(std::uint8_t* destination, const std::uint8_t* source)
+{
+  const auto alpha = static_cast<std::uint32_t>(source[3]);
+  if (alpha == UINT32_C(255)) {
+    std::memcpy(destination, source, 4U);
+    return;
+  }
+  if (alpha == 0U) {
+    return;
+  }
+
+  const auto inverse_alpha = UINT32_C(255) - alpha;
+  for (std::size_t channel = 0; channel < 3U; ++channel) {
+    destination[channel] = static_cast<std::uint8_t>(
+      (static_cast<std::uint32_t>(source[channel]) * alpha
+       + static_cast<std::uint32_t>(destination[channel]) * inverse_alpha
+       + UINT32_C(127))
+      / UINT32_C(255));
+  }
+  destination[3] = static_cast<std::uint8_t>(
+    std::min(UINT32_C(255), alpha + static_cast<std::uint32_t>(destination[3]) * inverse_alpha / UINT32_C(255)));
+}
+
+bool RenderCameraElement(
   GstSample* sample,
-  std::vector<std::uint8_t>& output,
-  std::size_t slot_index,
-  ViewSlotFreezeCache& freeze_cache)
+  const ViewCameraElement& element,
+  std::vector<std::uint8_t>& output)
 {
   if (sample == nullptr) {
     return false;
@@ -1084,32 +1264,150 @@ bool CopyAndScaleRgbaToQuadrant(
     return false;
   }
 
-  const std::size_t origin_x = (slot_index % 2U) * kQuadrantWidth;
-  const std::size_t origin_y = (slot_index / 2U) * kQuadrantHeight;
-  for (std::size_t y = 0; y < kQuadrantHeight; ++y) {
-    const std::size_t source_y = y * static_cast<std::size_t>(src_height) / kQuadrantHeight;
-    const auto* source_row = map.data + source_y * src_stride;
-    auto* destination_row = output.data() + (origin_y + y) * kViewComposedStride + origin_x * 4U;
-    auto* cache_row = freeze_cache.rgba.data() + y * kQuadrantStride;
+  if (element.rotation_degrees == 0.0
+      && element.fit_mode == RCH_VIEW_CAMERA_FIT_STRETCH
+      && element.crop_left == 0.0 && element.crop_top == 0.0
+      && element.crop_right == 0.0 && element.crop_bottom == 0.0) {
+    const auto origin_x = static_cast<std::int64_t>(std::llround(
+      element.x * static_cast<double>(kViewComposedWidth)));
+    const auto origin_y = static_cast<std::int64_t>(std::llround(
+      element.y * static_cast<double>(kViewComposedHeight)));
+    const auto destination_width = static_cast<std::int64_t>(std::llround(
+      element.width * static_cast<double>(kViewComposedWidth)));
+    const auto destination_height = static_cast<std::int64_t>(std::llround(
+      element.height * static_cast<double>(kViewComposedHeight)));
+    const auto clipped_left = std::max<std::int64_t>(0, origin_x);
+    const auto clipped_top = std::max<std::int64_t>(0, origin_y);
+    const auto clipped_right = std::min<std::int64_t>(
+      static_cast<std::int64_t>(kViewComposedWidth),
+      origin_x + destination_width);
+    const auto clipped_bottom = std::min<std::int64_t>(
+      static_cast<std::int64_t>(kViewComposedHeight),
+      origin_y + destination_height);
 
-    for (std::size_t x = 0; x < kQuadrantWidth; ++x) {
-      const std::size_t source_x = x * static_cast<std::size_t>(src_width) / kQuadrantWidth;
-      const auto* source_pixel = source_row + source_x * 4U;
-      auto* destination_pixel = destination_row + x * 4U;
-      auto* cache_pixel = cache_row + x * 4U;
-      destination_pixel[0] = source_pixel[0];
-      destination_pixel[1] = source_pixel[1];
-      destination_pixel[2] = source_pixel[2];
-      destination_pixel[3] = source_pixel[3];
-      cache_pixel[0] = source_pixel[0];
-      cache_pixel[1] = source_pixel[1];
-      cache_pixel[2] = source_pixel[2];
-      cache_pixel[3] = source_pixel[3];
+    for (auto destination_y = clipped_top; destination_y < clipped_bottom; ++destination_y) {
+      auto local_y = destination_y - origin_y;
+      if (element.flip_vertical) {
+        local_y = destination_height - 1 - local_y;
+      }
+      const auto source_y = static_cast<std::size_t>(
+        local_y * static_cast<std::int64_t>(src_height) / destination_height);
+      for (auto destination_x = clipped_left; destination_x < clipped_right; ++destination_x) {
+        auto local_x = destination_x - origin_x;
+        if (element.flip_horizontal) {
+          local_x = destination_width - 1 - local_x;
+        }
+        const auto source_x = static_cast<std::size_t>(
+          local_x * static_cast<std::int64_t>(src_width) / destination_width);
+        const auto* source_pixel = map.data + source_y * src_stride + source_x * 4U;
+        auto* destination_pixel = output.data()
+          + static_cast<std::size_t>(destination_y) * kViewComposedStride
+          + static_cast<std::size_t>(destination_x) * 4U;
+        BlendRgba(destination_pixel, source_pixel);
+      }
+    }
+
+    gst_buffer_unmap(buffer, &map);
+    return true;
+  }
+
+  constexpr double pi = 3.14159265358979323846;
+  const double radians = element.rotation_degrees * pi / 180.0;
+  const double cosine = std::cos(radians);
+  const double sine = std::sin(radians);
+  const double element_width_px = element.width * static_cast<double>(kViewComposedWidth);
+  const double element_height_px = element.height * static_cast<double>(kViewComposedHeight);
+  const double centre_x = (element.x + element.width * 0.5) * static_cast<double>(kViewComposedWidth);
+  const double centre_y = (element.y + element.height * 0.5) * static_cast<double>(kViewComposedHeight);
+  const double half_bounds_width =
+    std::abs(cosine) * element_width_px * 0.5 + std::abs(sine) * element_height_px * 0.5;
+  const double half_bounds_height =
+    std::abs(sine) * element_width_px * 0.5 + std::abs(cosine) * element_height_px * 0.5;
+
+  const auto min_x = static_cast<std::int32_t>(std::max(
+    0.0,
+    std::floor(centre_x - half_bounds_width)));
+  const auto max_x = static_cast<std::int32_t>(std::min(
+    static_cast<double>(kViewComposedWidth),
+    std::ceil(centre_x + half_bounds_width)));
+  const auto min_y = static_cast<std::int32_t>(std::max(
+    0.0,
+    std::floor(centre_y - half_bounds_height)));
+  const auto max_y = static_cast<std::int32_t>(std::min(
+    static_cast<double>(kViewComposedHeight),
+    std::ceil(centre_y + half_bounds_height)));
+
+  const double cropped_x = element.crop_left * static_cast<double>(src_width);
+  const double cropped_y = element.crop_top * static_cast<double>(src_height);
+  double cropped_width = (1.0 - element.crop_left - element.crop_right) * static_cast<double>(src_width);
+  double cropped_height = (1.0 - element.crop_top - element.crop_bottom) * static_cast<double>(src_height);
+  double source_x_offset = cropped_x;
+  double source_y_offset = cropped_y;
+  double content_left = 0.0;
+  double content_top = 0.0;
+  double content_width = 1.0;
+  double content_height = 1.0;
+
+  const double source_aspect = cropped_width / cropped_height;
+  const double destination_aspect = element_width_px / element_height_px;
+  if (element.fit_mode == RCH_VIEW_CAMERA_FIT_CONTAIN) {
+    if (source_aspect > destination_aspect) {
+      content_height = destination_aspect / source_aspect;
+      content_top = (1.0 - content_height) * 0.5;
+    } else {
+      content_width = source_aspect / destination_aspect;
+      content_left = (1.0 - content_width) * 0.5;
+    }
+  } else if (element.fit_mode == RCH_VIEW_CAMERA_FIT_COVER) {
+    if (source_aspect > destination_aspect) {
+      const double covered_width = cropped_height * destination_aspect;
+      source_x_offset += (cropped_width - covered_width) * 0.5;
+      cropped_width = covered_width;
+    } else {
+      const double covered_height = cropped_width / destination_aspect;
+      source_y_offset += (cropped_height - covered_height) * 0.5;
+      cropped_height = covered_height;
+    }
+  }
+
+  for (std::int32_t destination_y = min_y; destination_y < max_y; ++destination_y) {
+    for (std::int32_t destination_x = min_x; destination_x < max_x; ++destination_x) {
+      const double rotated_x = static_cast<double>(destination_x) + 0.5 - centre_x;
+      const double rotated_y = static_cast<double>(destination_y) + 0.5 - centre_y;
+      const double local_x = cosine * rotated_x + sine * rotated_y;
+      const double local_y = -sine * rotated_x + cosine * rotated_y;
+      double u = local_x / element_width_px + 0.5;
+      double v = local_y / element_height_px + 0.5;
+      if (u < content_left || u >= content_left + content_width
+          || v < content_top || v >= content_top + content_height) {
+        continue;
+      }
+
+      u = (u - content_left) / content_width;
+      v = (v - content_top) / content_height;
+      if (element.flip_horizontal) {
+        u = 1.0 - u;
+      }
+      if (element.flip_vertical) {
+        v = 1.0 - v;
+      }
+      const auto source_x = static_cast<std::size_t>(std::clamp(
+        source_x_offset + u * cropped_width,
+        0.0,
+        static_cast<double>(src_width - 1)));
+      const auto source_y = static_cast<std::size_t>(std::clamp(
+        source_y_offset + v * cropped_height,
+        0.0,
+        static_cast<double>(src_height - 1)));
+      const auto* source_pixel = map.data + source_y * src_stride + source_x * 4U;
+      auto* destination_pixel = output.data()
+        + static_cast<std::size_t>(destination_y) * kViewComposedStride
+        + static_cast<std::size_t>(destination_x) * 4U;
+      BlendRgba(destination_pixel, source_pixel);
     }
   }
 
   gst_buffer_unmap(buffer, &map);
-  freeze_cache.has_frame = true;
   return true;
 }
 
@@ -1174,58 +1472,58 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
   while (!state->stop_requested.load(std::memory_order_acquire)) {
     const auto tick_start = std::chrono::steady_clock::now();
 
-    std::array<std::optional<ViewSourceBinding>, kGate3BViewSourceSlots> active_sources{};
+    std::vector<std::shared_ptr<ViewCameraElement>> active_elements;
+    bool legacy_four_slot_layout = false;
     {
       std::lock_guard lock(state->mutex);
-      for (std::size_t i = 0; i < active_sources.size(); ++i) {
-        active_sources[i] = state->sources[i];
-      }
+      active_elements = state->scene_elements;
+      legacy_four_slot_layout = state->legacy_four_slot_layout;
     }
 
     std::fill(state->composed_pixels.begin(), state->composed_pixels.end(), UINT8_C(0));
     ViewRenderStats tick_stats{};
 
-    for (std::size_t slot = 0; slot < active_sources.size(); ++slot) {
-      auto& freeze_cache = state->slot_freeze_cache[slot];
-      auto& slot_diagnostics = state->slot_diagnostics[slot];
-      const auto& binding = active_sources[slot];
-      if (!binding.has_value()) {
-        freeze_cache.camera_id.clear();
-        freeze_cache.has_frame = false;
-        freeze_cache.last_sequence = 0;
-        slot_diagnostics.source_state.store(
-          RCH_VIEW_SOURCE_STATE_UNBOUND,
-          std::memory_order_release);
-        slot_diagnostics.latest_sequence.store(0, std::memory_order_release);
-        slot_diagnostics.freeze_cache_has_frame.store(0, std::memory_order_release);
-        FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(32), UINT8_C(32), UINT8_C(32));
+    if (legacy_four_slot_layout) {
+      for (std::size_t slot = 0; slot < kGate3BViewSourceSlots; ++slot) {
+        FillQuadrantPlaceholder(
+          state->composed_pixels,
+          slot,
+          UINT8_C(32),
+          UINT8_C(32),
+          UINT8_C(32));
+      }
+    } else {
+      for (std::size_t alpha = 3U; alpha < state->composed_pixels.size(); alpha += 4U) {
+        state->composed_pixels[alpha] = UINT8_C(255);
+      }
+    }
+
+    for (const auto& element : active_elements) {
+      if (element == nullptr) {
         continue;
       }
-
       ++tick_stats.bound_source_count;
-      if (freeze_cache.camera_id != binding->camera_id) {
-        freeze_cache.camera_id = binding->camera_id;
-        freeze_cache.has_frame = false;
-        freeze_cache.last_sequence = 0;
-        slot_diagnostics.latest_sequence.store(0, std::memory_order_release);
-        slot_diagnostics.freeze_cache_has_frame.store(0, std::memory_order_release);
-      }
-
-      auto camera = binding->camera.lock();
+      auto camera = element->camera.lock();
       if (camera == nullptr || camera->ingest == nullptr || camera->removed.load(std::memory_order_acquire)) {
+        robocamhub::frames::LatestFrameLease last_good;
+        {
+          std::lock_guard frame_lock(element->last_good_mutex);
+          last_good = element->last_good_frame;
+        }
         ++tick_stats.stale_or_missing_source_count;
         ++tick_stats.stale_source_frame_count;
-        slot_diagnostics.latest_sequence.store(freeze_cache.last_sequence, std::memory_order_release);
-        slot_diagnostics.freeze_cache_has_frame.store(
-          freeze_cache.has_frame ? 1U : 0U,
+        element->latest_sequence.store(last_good.sequence, std::memory_order_release);
+        element->freeze_cache_has_frame.store(
+          last_good.has_frame ? 1U : 0U,
           std::memory_order_release);
-        slot_diagnostics.source_state.store(
+        element->source_state.store(
           RCH_VIEW_SOURCE_STATE_MISSING_OR_STALE,
           std::memory_order_release);
-        if (freeze_cache.has_frame) {
-          BlitQuadrantFromCache(freeze_cache, state->composed_pixels, slot);
-        } else {
-          FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(48), UINT8_C(24), UINT8_C(24));
+        if (element->visible && element->enabled && last_good.has_frame) {
+          (void)RenderCameraElement(
+            last_good.sample(),
+            *element,
+            state->composed_pixels);
         }
         continue;
       }
@@ -1236,49 +1534,62 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
       camera->ingest->FillStatus(camera_status);
 
       const auto lease = camera->ingest->AcquireLatestFrameLease();
-      if (lease.has_frame && lease.sample() != nullptr
-          && CopyAndScaleRgbaToQuadrant(lease.sample(), state->composed_pixels, slot, freeze_cache)) {
+      if (lease.has_frame && lease.sample() != nullptr) {
+        {
+          std::lock_guard frame_lock(element->last_good_mutex);
+          element->last_good_frame = lease;
+        }
         ++tick_stats.sources_with_frame_count;
-        ++tick_stats.sources_contributing_count;
         ++tick_stats.live_source_count;
-        freeze_cache.last_sequence = lease.sequence;
-        slot_diagnostics.latest_sequence.store(lease.sequence, std::memory_order_release);
-        slot_diagnostics.freeze_cache_has_frame.store(1U, std::memory_order_release);
-        slot_diagnostics.source_state.store(RCH_VIEW_SOURCE_STATE_LIVE, std::memory_order_release);
+        element->latest_sequence.store(lease.sequence, std::memory_order_release);
+        element->freeze_cache_has_frame.store(1U, std::memory_order_release);
+        element->source_state.store(RCH_VIEW_SOURCE_STATE_LIVE, std::memory_order_release);
+        if (element->visible && element->enabled
+            && RenderCameraElement(lease.sample(), *element, state->composed_pixels)) {
+          ++tick_stats.sources_contributing_count;
+        }
         if (lease.sequence > tick_stats.last_observed_source_sequence) {
           tick_stats.last_observed_source_sequence = lease.sequence;
         }
         continue;
       }
 
-      if (freeze_cache.has_frame) {
+      robocamhub::frames::LatestFrameLease last_good;
+      {
+        std::lock_guard frame_lock(element->last_good_mutex);
+        last_good = element->last_good_frame;
+      }
+      if (last_good.has_frame) {
         ++tick_stats.frozen_source_count;
-        slot_diagnostics.source_state.store(
+        element->source_state.store(
           RCH_VIEW_SOURCE_STATE_FROZEN_LAST_GOOD,
           std::memory_order_release);
-        BlitQuadrantFromCache(freeze_cache, state->composed_pixels, slot);
+        if (element->visible && element->enabled) {
+          (void)RenderCameraElement(
+            last_good.sample(),
+            *element,
+            state->composed_pixels);
+        }
       } else if (camera_status.state == RCH_CAMERA_STATE_WAITING_TO_RETRY
                  || camera_status.state == RCH_CAMERA_STATE_STARTING
                  || camera_status.state == RCH_CAMERA_STATE_FAILED) {
         ++tick_stats.reconnecting_source_count;
-        slot_diagnostics.source_state.store(
+        element->source_state.store(
           RCH_VIEW_SOURCE_STATE_RECONNECTING,
           std::memory_order_release);
-        FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(48), UINT8_C(40), UINT8_C(18));
       } else {
         ++tick_stats.waiting_for_first_frame_count;
-        slot_diagnostics.source_state.store(
+        element->source_state.store(
           RCH_VIEW_SOURCE_STATE_WAITING_FOR_FIRST_FRAME,
           std::memory_order_release);
-        FillQuadrantPlaceholder(state->composed_pixels, slot, UINT8_C(24), UINT8_C(24), UINT8_C(48));
       }
 
-      slot_diagnostics.latest_sequence.store(freeze_cache.last_sequence, std::memory_order_release);
-      slot_diagnostics.freeze_cache_has_frame.store(
-        freeze_cache.has_frame ? 1U : 0U,
+      element->latest_sequence.store(last_good.sequence, std::memory_order_release);
+      element->freeze_cache_has_frame.store(
+        last_good.has_frame ? 1U : 0U,
         std::memory_order_release);
 
-      if (!freeze_cache.has_frame) {
+      if (!last_good.has_frame) {
         ++tick_stats.stale_or_missing_source_count;
         ++tick_stats.stale_source_frame_count;
       }
@@ -2171,16 +2482,52 @@ extern "C" rch_result rch_view_bind_camera_source(
       return RCH_RESULT_NOT_CONFIGURED;
     }
 
-    std::lock_guard lock(view->state->mutex);
-    auto& slot = view->state->sources[slot_index];
-    ReleaseViewBinding(slot);
-
-    ViewSourceBinding binding{};
-    binding.camera_id = camera_id_utf8;
-    binding.camera = entry;
-    binding.last_observed_sequence = 0;
-    slot = std::move(binding);
-    entry->view_binding_count.fetch_add(1U, std::memory_order_acq_rel);
+    auto replacement = MakeLegacySlotElement(slot_index, camera_id_utf8, entry);
+    std::vector<std::shared_ptr<ViewCameraElement>> candidate;
+    std::vector<std::shared_ptr<ViewCameraElement>> replaced;
+    {
+      std::lock_guard lock(view->state->mutex);
+      candidate = view->state->scene_elements;
+      const auto found = std::find_if(
+        candidate.begin(),
+        candidate.end(),
+        [slot_index](const auto& element) {
+          std::size_t element_slot = 0;
+          return element != nullptr
+            && IsLegacySlotElementId(element->element_id, element_slot)
+            && element_slot == slot_index;
+        });
+      if (found == candidate.end()) {
+        candidate.push_back(std::move(replacement));
+      } else {
+        if ((*found)->camera_id == replacement->camera_id) {
+          std::lock_guard frame_lock((*found)->last_good_mutex);
+          replacement->last_good_frame = (*found)->last_good_frame;
+          replacement->source_state.store(
+            (*found)->source_state.load(std::memory_order_acquire),
+            std::memory_order_release);
+          replacement->latest_sequence.store(
+            (*found)->latest_sequence.load(std::memory_order_acquire),
+            std::memory_order_release);
+          replacement->freeze_cache_has_frame.store(
+            (*found)->freeze_cache_has_frame.load(std::memory_order_acquire),
+            std::memory_order_release);
+        }
+        *found = std::move(replacement);
+      }
+      std::sort(candidate.begin(), candidate.end(), SceneElementOrder);
+      for (const auto& element : candidate) {
+        if (auto camera = element->camera.lock(); camera != nullptr) {
+          camera->view_binding_count.fetch_add(1U, std::memory_order_acq_rel);
+        }
+      }
+      replaced = std::move(view->state->scene_elements);
+      view->state->scene_elements = std::move(candidate);
+      view->state->legacy_four_slot_layout = true;
+    }
+    for (const auto& element : replaced) {
+      ReleaseViewElement(element);
+    }
     return RCH_RESULT_OK;
   } catch (const std::bad_alloc&) {
     return RCH_RESULT_OUT_OF_MEMORY;
@@ -2205,10 +2552,77 @@ extern "C" rch_result rch_view_unbind_source(
       return RCH_RESULT_INVALID_HANDLE;
     }
 
-    std::lock_guard lock(view->state->mutex);
-    auto& slot = view->state->sources[slot_index];
-    ReleaseViewBinding(slot);
+    std::shared_ptr<ViewCameraElement> removed;
+    {
+      std::lock_guard lock(view->state->mutex);
+      const auto found = std::find_if(
+        view->state->scene_elements.begin(),
+        view->state->scene_elements.end(),
+        [slot_index](const auto& element) {
+          std::size_t element_slot = 0;
+          return element != nullptr
+            && IsLegacySlotElementId(element->element_id, element_slot)
+            && element_slot == slot_index;
+        });
+      if (found != view->state->scene_elements.end()) {
+        removed = std::move(*found);
+        view->state->scene_elements.erase(found);
+      }
+      view->state->legacy_four_slot_layout = true;
+    }
+    ReleaseViewElement(removed);
     return RCH_RESULT_OK;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
+extern "C" rch_result rch_view_apply_camera_scene(
+  rch_view_handle view,
+  const rch_view_camera_element_v1* elements,
+  uint32_t element_count) noexcept
+{
+  if (view == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (element_count > RCH_VIEW_MAX_SCENE_ELEMENTS
+      || (element_count > 0U && elements == nullptr)) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  try {
+    if (view->destroyed.load(std::memory_order_acquire) || view->state == nullptr) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+    if (!IsRegistryActive(view->state->registry)
+        || view->state->removed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+
+    std::unordered_set<std::string> element_ids;
+    std::vector<std::shared_ptr<ViewCameraElement>> candidate;
+    candidate.reserve(element_count);
+    for (std::uint32_t index = 0; index < element_count; ++index) {
+      const auto& config = elements[index];
+      if (!IsValidCameraElement(config)) {
+        return RCH_RESULT_INVALID_ARGUMENT;
+      }
+      if (!element_ids.emplace(config.element_id_utf8).second) {
+        return RCH_RESULT_INVALID_ARGUMENT;
+      }
+
+      const auto camera = FindCameraById(view->state->registry, config.camera_id_utf8);
+      if (camera == nullptr || camera->ingest == nullptr
+          || camera->removed.load(std::memory_order_acquire)) {
+        return RCH_RESULT_NOT_CONFIGURED;
+      }
+      candidate.push_back(MakeCameraElement(config, camera));
+    }
+
+    ReplaceViewScene(*view->state, std::move(candidate), false);
+    return RCH_RESULT_OK;
+  } catch (const std::bad_alloc&) {
+    return RCH_RESULT_OUT_OF_MEMORY;
   } catch (...) {
     return RCH_RESULT_INTERNAL_ERROR;
   }
@@ -2260,13 +2674,9 @@ extern "C" rch_result rch_view_get_status(
       : (view_status_v2_ok ? RCH_VIEW_STATUS_VERSION_V2 : RCH_VIEW_STATUS_VERSION_V1);
 
     std::lock_guard source_lock(view->state->mutex);
-    for (auto& source : view->state->sources) {
-      if (!source.has_value()) {
-        continue;
-      }
-
+    for (const auto& source : view->state->scene_elements) {
       ++status.bound_source_count;
-      auto camera = source->camera.lock();
+      auto camera = source == nullptr ? nullptr : source->camera.lock();
       if (camera == nullptr || camera->ingest == nullptr || camera->removed.load(std::memory_order_acquire)) {
         ++status.stale_or_missing_source_count;
         continue;
@@ -2363,11 +2773,20 @@ extern "C" rch_result rch_view_get_source_status(
     std::memset(status.camera_id_utf8, 0, sizeof(status.camera_id_utf8));
 
     std::lock_guard lock(view->state->mutex);
-    const auto& binding = view->state->sources[slot_index];
-    if (!binding.has_value()) {
+    const auto found = std::find_if(
+      view->state->scene_elements.begin(),
+      view->state->scene_elements.end(),
+      [slot_index](const auto& element) {
+        std::size_t element_slot = 0;
+        return element != nullptr
+          && IsLegacySlotElementId(element->element_id, element_slot)
+          && element_slot == slot_index;
+      });
+    if (found == view->state->scene_elements.end()) {
       std::memcpy(out_status, &status, sizeof(status));
       return RCH_RESULT_OK;
     }
+    const auto& binding = *found;
 
     status.has_binding = 1U;
     const auto copy_length = std::min(
@@ -2376,12 +2795,9 @@ extern "C" rch_result rch_view_get_source_status(
     std::memcpy(status.camera_id_utf8, binding->camera_id.data(), copy_length);
     status.camera_id_utf8[copy_length] = '\0';
 
-    const auto rendered_source_state = view->state->slot_diagnostics[slot_index].source_state.load(
-      std::memory_order_acquire);
-    const auto rendered_latest_sequence = view->state->slot_diagnostics[slot_index].latest_sequence.load(
-      std::memory_order_acquire);
-    const auto rendered_has_freeze = view->state->slot_diagnostics[slot_index].freeze_cache_has_frame.load(
-      std::memory_order_acquire);
+    const auto rendered_source_state = binding->source_state.load(std::memory_order_acquire);
+    const auto rendered_latest_sequence = binding->latest_sequence.load(std::memory_order_acquire);
+    const auto rendered_has_freeze = binding->freeze_cache_has_frame.load(std::memory_order_acquire);
 
     auto camera = binding->camera.lock();
     if (camera == nullptr || camera->ingest == nullptr || camera->removed.load(std::memory_order_acquire)) {

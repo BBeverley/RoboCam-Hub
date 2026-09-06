@@ -136,6 +136,37 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
             cancellationToken);
     }
 
+    public Task ApplyViewSceneAsync(
+        string viewId,
+        IReadOnlyList<ViewSceneElementDefinition> elements,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(elements);
+        ViewDefinition updatedDefinition;
+        lock (_definitionGate)
+        {
+            var current = _viewDefinitions.SingleOrDefault(definition => definition.Id == viewId)
+                ?? throw new KeyNotFoundException($"View '{viewId}' is not part of this workspace.");
+            updatedDefinition = new ViewDefinition(current.Id, current.Name, elements);
+        }
+
+        return RunAsync(
+            _ =>
+            {
+                GetViewRuntime(viewId).ApplyScene(updatedDefinition.SceneElements);
+                lock (_definitionGate)
+                {
+                    var index = _viewDefinitions.FindIndex(definition => definition.Id == viewId);
+                    if (index < 0)
+                    {
+                        throw new KeyNotFoundException($"View '{viewId}' is not part of this workspace.");
+                    }
+                    _viewDefinitions[index] = updatedDefinition;
+                }
+            },
+            cancellationToken);
+    }
+
     public Task BindCameraSourceAsync(
         string viewId,
         uint slotIndex,

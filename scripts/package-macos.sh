@@ -64,6 +64,7 @@ while (( index < ${#queue[@]} )); do
   owner="${queue[$index]}"; ((index+=1))
   while IFS= read -r dependency; do
     [[ -z "$dependency" ]] && continue
+    [[ "$(basename "$dependency")" == "$(basename "$owner")" ]] && continue
     is_system_dependency "$dependency" && continue
     resolved="$(resolve_dependency "$dependency" "$owner")" || {
       echo "Unable to resolve dependency '$dependency' required by '$owner'." >&2; exit 1;
@@ -80,6 +81,7 @@ rewrite_binary() {
   local owner="$1" replacement_prefix="$2"
   while IFS= read -r dependency; do
     [[ -z "$dependency" ]] && continue
+    [[ "$(basename "$dependency")" == "$(basename "$owner")" ]] && continue
     is_system_dependency "$dependency" && continue
     install_name_tool -change "$dependency" "$replacement_prefix/$(basename "$dependency")" "$owner"
   done < <(otool -L "$owner" | tail -n +2 | sed -E 's/^[[:space:]]+([^[:space:]]+).*/\1/')

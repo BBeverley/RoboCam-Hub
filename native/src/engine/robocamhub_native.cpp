@@ -6,6 +6,8 @@
 #include "preview/native_preview_surface.h"
 
 #include <gst/gst.h>
+#include <gst/app/gstappsink.h>
+#include <pango/pangocairo.h>
 
 #include <algorithm>
 #include <array>
@@ -90,8 +92,10 @@ struct EngineRegistry final {
 };
 
 struct ViewCameraElement final {
+  rch_view_scene_element_kind kind{RCH_VIEW_SCENE_ELEMENT_CAMERA};
   std::string element_id;
   std::string camera_id;
+  std::string asset_id;
   std::weak_ptr<CameraEntry> camera;
   double x{0.0};
   double y{0.0};
@@ -108,6 +112,14 @@ struct ViewCameraElement final {
   bool flip_vertical{false};
   bool visible{true};
   bool enabled{true};
+  double opacity{1.0};
+  std::uint32_t primary_rgba{0U};
+  std::uint32_t secondary_rgba{0U};
+  bool secondary_enabled{false};
+  double stroke_width{0.0};
+  std::uint32_t raster_width{0U};
+  std::uint32_t raster_height{0U};
+  std::vector<std::uint8_t> raster_pixels;
   std::mutex last_good_mutex;
   robocamhub::frames::LatestFrameLease last_good_frame{};
   std::atomic<std::uint32_t> source_state{RCH_VIEW_SOURCE_STATE_UNBOUND};
@@ -146,6 +158,8 @@ constexpr std::size_t kQuadrantWidth = kViewComposedWidth / 2U;
 constexpr std::size_t kQuadrantHeight = kViewComposedHeight / 2U;
 constexpr double kMaximumNormalizedMagnitude = 16.0;
 constexpr std::int32_t kMaximumZOrderMagnitude = 1000000;
+constexpr std::size_t kMaximumSceneResourceBytes = 256U * 1024U * 1024U;
+constexpr std::size_t kMaximumSingleResourceBytes = 64U * 1024U * 1024U;
 
 static_assert(kGate3BViewSourceSlots <= RCH_VIEW_MAX_SOURCE_SLOTS,
               "fixed compositor slot count must not exceed ABI slot ceiling");
@@ -1149,6 +1163,378 @@ std::shared_ptr<ViewCameraElement> MakeCameraElement(
   return element;
 }
 
+bool IsValidOptionalUtf8(const char* value, std::size_t maximum_bytes)
+{
+  return value == nullptr
+    || (std::strlen(value) <= maximum_bytes && g_utf8_validate(value, -1, nullptr) != FALSE);
+}
+
+bool IsValidSceneElement(const rch_view_scene_element_v1& element)
+{
+  if (element.struct_version != RCH_VIEW_SCENE_ELEMENT_VERSION_V1
+      || element.struct_size < sizeof(rch_view_scene_element_v1)
+      || !IsValidCameraIdUtf8(element.element_id_utf8)
+      || element.kind > RCH_VIEW_SCENE_ELEMENT_FRAME
+      || !IsValidOptionalUtf8(element.camera_id_utf8, 255U)
+      || !IsValidOptionalUtf8(element.image_asset_id_utf8, 255U)
+      || !IsValidOptionalUtf8(element.image_source_utf8, 4096U)
+      || !IsValidOptionalUtf8(element.text_utf8, 16384U)
+      || !IsValidOptionalUtf8(element.font_family_utf8, 255U)) {
+    return false;
+  }
+  if (!std::isfinite(element.x) || !std::isfinite(element.y)
+      || !std::isfinite(element.width) || !std::isfinite(element.height)
+      || !std::isfinite(element.rotation_degrees) || !std::isfinite(element.opacity)
+      || !std::isfinite(element.stroke_width) || !std::isfinite(element.font_size)
+      || std::abs(element.x) > kMaximumNormalizedMagnitude
+      || std::abs(element.y) > kMaximumNormalizedMagnitude
+      || element.width <= 0.0 || element.width > kMaximumNormalizedMagnitude
+      || element.height <= 0.0 || element.height > kMaximumNormalizedMagnitude
+      || element.rotation_degrees < -360.0 || element.rotation_degrees > 360.0
+      || element.z_order < -kMaximumZOrderMagnitude
+      || element.z_order > kMaximumZOrderMagnitude
+      || element.opacity < 0.0 || element.opacity > 1.0
+      || element.stroke_width < 0.0 || element.stroke_width > 512.0
+      || !IsBooleanValue(element.flip_horizontal)
+      || !IsBooleanValue(element.flip_vertical)
+      || !IsBooleanValue(element.visible)
+      || !IsBooleanValue(element.enabled)
+      || !IsBooleanValue(element.secondary_enabled)
+      || !IsBooleanValue(element.text_underline)) {
+    return false;
+  }
+  if (!std::all_of(
+        std::begin(element.reserved),
+        std::end(element.reserved),
+        [](std::uint32_t value) { return value == 0U; })) {
+    return false;
+  }
+
+  switch (element.kind) {
+    case RCH_VIEW_SCENE_ELEMENT_CAMERA:
+      return IsValidCameraIdUtf8(element.camera_id_utf8)
+        && element.fit_mode <= RCH_VIEW_CAMERA_FIT_COVER;
+    case RCH_VIEW_SCENE_ELEMENT_TEXT:
+      return element.text_utf8 != nullptr && element.text_utf8[0] != '\0'
+        && element.font_family_utf8 != nullptr && element.font_family_utf8[0] != '\0'
+        && element.font_size >= 1.0 && element.font_size <= 512.0
+        && element.text_alignment <= RCH_VIEW_TEXT_ALIGN_RIGHT
+        && element.text_vertical_alignment <= RCH_VIEW_TEXT_VERTICAL_ALIGN_BOTTOM
+        && element.text_weight <= RCH_VIEW_TEXT_WEIGHT_BOLD
+        && element.text_style <= RCH_VIEW_TEXT_STYLE_ITALIC;
+    case RCH_VIEW_SCENE_ELEMENT_IMAGE:
+      return IsValidCameraIdUtf8(element.image_asset_id_utf8)
+        && element.image_source_utf8 != nullptr && element.image_source_utf8[0] != '\0'
+        && element.fit_mode <= RCH_VIEW_CAMERA_FIT_COVER;
+    case RCH_VIEW_SCENE_ELEMENT_RECTANGLE:
+      return element.stroke_width >= 0.0;
+    case RCH_VIEW_SCENE_ELEMENT_FRAME:
+      return element.stroke_width > 0.0;
+    default:
+      return false;
+  }
+}
+
+void UnpackRgba(std::uint32_t rgba, double opacity, double& r, double& g, double& b, double& a)
+{
+  r = static_cast<double>((rgba >> 24U) & UINT32_C(255)) / 255.0;
+  g = static_cast<double>((rgba >> 16U) & UINT32_C(255)) / 255.0;
+  b = static_cast<double>((rgba >> 8U) & UINT32_C(255)) / 255.0;
+  a = static_cast<double>(rgba & UINT32_C(255)) / 255.0 * opacity;
+}
+
+rch_result PrepareTextResource(
+  const rch_view_scene_element_v1& config,
+  ViewCameraElement& element)
+{
+  const auto width = static_cast<std::uint32_t>(std::clamp(
+    std::llround(config.width * static_cast<double>(kViewComposedWidth)),
+    INT64_C(1),
+    INT64_C(4096)));
+  const auto height = static_cast<std::uint32_t>(std::clamp(
+    std::llround(config.height * static_cast<double>(kViewComposedHeight)),
+    INT64_C(1),
+    INT64_C(4096)));
+  const auto byte_count = static_cast<std::size_t>(width) * height * 4U;
+  if (byte_count > kMaximumSingleResourceBytes) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  auto* surface = cairo_image_surface_create(
+    CAIRO_FORMAT_ARGB32,
+    static_cast<int>(width),
+    static_cast<int>(height));
+  if (surface == nullptr || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+    if (surface != nullptr) {
+      cairo_surface_destroy(surface);
+    }
+    return RCH_RESULT_OUT_OF_MEMORY;
+  }
+  auto* context = cairo_create(surface);
+  if (context == nullptr || cairo_status(context) != CAIRO_STATUS_SUCCESS) {
+    if (context != nullptr) {
+      cairo_destroy(context);
+    }
+    cairo_surface_destroy(surface);
+    return RCH_RESULT_OUT_OF_MEMORY;
+  }
+
+  cairo_set_operator(context, CAIRO_OPERATOR_SOURCE);
+  if (config.secondary_enabled != 0U) {
+    double r = 0.0;
+    double g = 0.0;
+    double b = 0.0;
+    double a = 0.0;
+    UnpackRgba(config.secondary_rgba, config.opacity, r, g, b, a);
+    cairo_set_source_rgba(context, r, g, b, a);
+  } else {
+    cairo_set_source_rgba(context, 0.0, 0.0, 0.0, 0.0);
+  }
+  cairo_paint(context);
+  cairo_set_operator(context, CAIRO_OPERATOR_OVER);
+
+  auto* layout = pango_cairo_create_layout(context);
+  auto* font = pango_font_description_new();
+  if (layout == nullptr || font == nullptr) {
+    if (font != nullptr) {
+      pango_font_description_free(font);
+    }
+    if (layout != nullptr) {
+      g_object_unref(layout);
+    }
+    cairo_destroy(context);
+    cairo_surface_destroy(surface);
+    return RCH_RESULT_OUT_OF_MEMORY;
+  }
+  pango_font_description_set_family(font, config.font_family_utf8);
+  pango_font_description_set_absolute_size(font, config.font_size * PANGO_SCALE);
+  pango_font_description_set_weight(
+    font,
+    config.text_weight == RCH_VIEW_TEXT_WEIGHT_BOLD ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL);
+  pango_font_description_set_style(
+    font,
+    config.text_style == RCH_VIEW_TEXT_STYLE_ITALIC ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL);
+  pango_layout_set_font_description(layout, font);
+  pango_layout_set_text(layout, config.text_utf8, -1);
+  pango_layout_set_width(layout, static_cast<int>(width) * PANGO_SCALE);
+  pango_layout_set_height(layout, static_cast<int>(height) * PANGO_SCALE);
+  pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+  if (config.text_underline != 0U) {
+    auto* attributes = pango_attr_list_new();
+    if (attributes == nullptr) {
+      pango_font_description_free(font);
+      g_object_unref(layout);
+      cairo_destroy(context);
+      cairo_surface_destroy(surface);
+      return RCH_RESULT_OUT_OF_MEMORY;
+    }
+    pango_attr_list_insert(attributes, pango_attr_underline_new(PANGO_UNDERLINE_SINGLE));
+    pango_layout_set_attributes(layout, attributes);
+    pango_attr_list_unref(attributes);
+  }
+  const auto alignment = config.text_alignment == RCH_VIEW_TEXT_ALIGN_CENTER
+    ? PANGO_ALIGN_CENTER
+    : (config.text_alignment == RCH_VIEW_TEXT_ALIGN_RIGHT ? PANGO_ALIGN_RIGHT : PANGO_ALIGN_LEFT);
+  pango_layout_set_alignment(layout, alignment);
+  double r = 0.0;
+  double g = 0.0;
+  double b = 0.0;
+  double a = 0.0;
+  UnpackRgba(config.primary_rgba, config.opacity, r, g, b, a);
+  cairo_set_source_rgba(context, r, g, b, a);
+  PangoRectangle logical_bounds{};
+  pango_layout_get_pixel_extents(layout, nullptr, &logical_bounds);
+  double text_y = -static_cast<double>(logical_bounds.y);
+  if (config.text_vertical_alignment == RCH_VIEW_TEXT_VERTICAL_ALIGN_CENTER) {
+    text_y += (static_cast<double>(height) - static_cast<double>(logical_bounds.height)) * 0.5;
+  } else if (config.text_vertical_alignment == RCH_VIEW_TEXT_VERTICAL_ALIGN_BOTTOM) {
+    text_y += static_cast<double>(height) - static_cast<double>(logical_bounds.height);
+  }
+  cairo_move_to(context, 0.0, text_y);
+  pango_cairo_show_layout(context, layout);
+  cairo_surface_flush(surface);
+
+  const auto release_rasterizer = [&]() {
+    pango_font_description_free(font);
+    g_object_unref(layout);
+    cairo_destroy(context);
+    cairo_surface_destroy(surface);
+  };
+  try {
+    element.raster_width = width;
+    element.raster_height = height;
+    element.raster_pixels.resize(byte_count);
+    const auto* source = cairo_image_surface_get_data(surface);
+    const auto stride = cairo_image_surface_get_stride(surface);
+    for (std::uint32_t y = 0; y < height; ++y) {
+      const auto* row = source + static_cast<std::size_t>(y) * static_cast<std::size_t>(stride);
+      for (std::uint32_t x = 0; x < width; ++x) {
+        const auto* pixel = row + static_cast<std::size_t>(x) * 4U;
+        auto* destination = element.raster_pixels.data()
+          + (static_cast<std::size_t>(y) * width + x) * 4U;
+#if G_BYTE_ORDER == G_LITTLE_ENDIAN
+        const std::uint8_t alpha = pixel[3];
+        destination[0] = alpha == 0U ? 0U : static_cast<std::uint8_t>(std::min(255U, pixel[2] * 255U / alpha));
+        destination[1] = alpha == 0U ? 0U : static_cast<std::uint8_t>(std::min(255U, pixel[1] * 255U / alpha));
+        destination[2] = alpha == 0U ? 0U : static_cast<std::uint8_t>(std::min(255U, pixel[0] * 255U / alpha));
+        destination[3] = alpha;
+#else
+        const std::uint8_t alpha = pixel[0];
+        destination[0] = alpha == 0U ? 0U : static_cast<std::uint8_t>(std::min(255U, pixel[1] * 255U / alpha));
+        destination[1] = alpha == 0U ? 0U : static_cast<std::uint8_t>(std::min(255U, pixel[2] * 255U / alpha));
+        destination[2] = alpha == 0U ? 0U : static_cast<std::uint8_t>(std::min(255U, pixel[3] * 255U / alpha));
+        destination[3] = alpha;
+#endif
+      }
+    }
+  } catch (...) {
+    release_rasterizer();
+    throw;
+  }
+
+  release_rasterizer();
+  return RCH_RESULT_OK;
+}
+
+rch_result PrepareImageResource(
+  const rch_view_scene_element_v1& config,
+  ViewCameraElement& element)
+{
+  if (g_file_test(config.image_source_utf8, G_FILE_TEST_IS_REGULAR) == FALSE) {
+    return RCH_RESULT_NOT_CONFIGURED;
+  }
+
+  GError* parse_error = nullptr;
+  auto* pipeline = gst_parse_launch(
+    "filesrc name=source ! decodebin ! videoconvert ! video/x-raw,format=RGBA ! "
+    "appsink name=sink sync=false max-buffers=1 drop=true",
+    &parse_error);
+  if (parse_error != nullptr) {
+    g_error_free(parse_error);
+  }
+  if (pipeline == nullptr) {
+    return RCH_RESULT_GSTREAMER_ERROR;
+  }
+  auto* source = gst_bin_get_by_name(GST_BIN(pipeline), "source");
+  auto* sink = gst_bin_get_by_name(GST_BIN(pipeline), "sink");
+  if (source == nullptr || sink == nullptr) {
+    if (source != nullptr) {
+      gst_object_unref(source);
+    }
+    if (sink != nullptr) {
+      gst_object_unref(sink);
+    }
+    gst_object_unref(pipeline);
+    return RCH_RESULT_GSTREAMER_ERROR;
+  }
+  g_object_set(source, "location", config.image_source_utf8, nullptr);
+  gst_object_unref(source);
+
+  const auto state_result = gst_element_set_state(pipeline, GST_STATE_PLAYING);
+  GstSample* sample = nullptr;
+  if (state_result != GST_STATE_CHANGE_FAILURE) {
+    sample = gst_app_sink_try_pull_sample(GST_APP_SINK(sink), 5U * GST_SECOND);
+  }
+  if (sample == nullptr) {
+    gst_element_set_state(pipeline, GST_STATE_NULL);
+    gst_object_unref(sink);
+    gst_object_unref(pipeline);
+    return RCH_RESULT_GSTREAMER_ERROR;
+  }
+
+  int width = 0;
+  int height = 0;
+  auto* caps = gst_sample_get_caps(sample);
+  const auto* structure = caps == nullptr ? nullptr : gst_caps_get_structure(caps, 0);
+  const auto* format = structure == nullptr ? nullptr : gst_structure_get_string(structure, "format");
+  const bool valid_caps = structure != nullptr
+    && format != nullptr && g_ascii_strcasecmp(format, "RGBA") == 0
+    && gst_structure_get_int(structure, "width", &width)
+    && gst_structure_get_int(structure, "height", &height)
+    && width > 0 && height > 0;
+  const auto byte_count = valid_caps
+    ? static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4U
+    : 0U;
+  GstMapInfo map{};
+  auto* buffer = gst_sample_get_buffer(sample);
+  const bool mapped = valid_caps && byte_count <= kMaximumSingleResourceBytes
+    && buffer != nullptr && gst_buffer_map(buffer, &map, GST_MAP_READ) != FALSE
+    && map.size >= byte_count;
+  try {
+    if (mapped) {
+      element.raster_width = static_cast<std::uint32_t>(width);
+      element.raster_height = static_cast<std::uint32_t>(height);
+      element.raster_pixels.assign(map.data, map.data + byte_count);
+    }
+  } catch (...) {
+    if (mapped) {
+      gst_buffer_unmap(buffer, &map);
+    }
+    gst_sample_unref(sample);
+    gst_element_set_state(pipeline, GST_STATE_NULL);
+    gst_object_unref(sink);
+    gst_object_unref(pipeline);
+    throw;
+  }
+  if (mapped) {
+    gst_buffer_unmap(buffer, &map);
+  }
+  gst_sample_unref(sample);
+  gst_element_set_state(pipeline, GST_STATE_NULL);
+  gst_object_unref(sink);
+  gst_object_unref(pipeline);
+  return mapped ? RCH_RESULT_OK : RCH_RESULT_INVALID_ARGUMENT;
+}
+
+rch_result MakeSceneElement(
+  const rch_view_scene_element_v1& config,
+  const std::shared_ptr<EngineRegistry>& registry,
+  std::shared_ptr<ViewCameraElement>& out_element)
+{
+  auto element = std::make_shared<ViewCameraElement>();
+  element->kind = config.kind;
+  element->element_id = config.element_id_utf8;
+  element->x = config.x;
+  element->y = config.y;
+  element->width = config.width;
+  element->height = config.height;
+  element->rotation_degrees = config.rotation_degrees == 360.0 || config.rotation_degrees == -360.0
+    ? 0.0
+    : config.rotation_degrees;
+  element->z_order = config.z_order;
+  element->fit_mode = config.fit_mode;
+  element->flip_horizontal = config.flip_horizontal != 0U;
+  element->flip_vertical = config.flip_vertical != 0U;
+  element->visible = config.visible != 0U;
+  element->enabled = config.enabled != 0U;
+  element->opacity = config.opacity;
+  element->primary_rgba = config.primary_rgba;
+  element->secondary_rgba = config.secondary_rgba;
+  element->secondary_enabled = config.secondary_enabled != 0U;
+  element->stroke_width = config.stroke_width;
+
+  rch_result result = RCH_RESULT_OK;
+  if (config.kind == RCH_VIEW_SCENE_ELEMENT_CAMERA) {
+    const auto camera = FindCameraById(registry, config.camera_id_utf8);
+    if (camera == nullptr || camera->ingest == nullptr
+        || camera->removed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_NOT_CONFIGURED;
+    }
+    element->camera_id = config.camera_id_utf8;
+    element->camera = camera;
+  } else if (config.kind == RCH_VIEW_SCENE_ELEMENT_TEXT) {
+    result = PrepareTextResource(config, *element);
+    element->opacity = 1.0;
+  } else if (config.kind == RCH_VIEW_SCENE_ELEMENT_IMAGE) {
+    element->asset_id = config.image_asset_id_utf8;
+    result = PrepareImageResource(config, *element);
+  }
+  if (result == RCH_RESULT_OK) {
+    out_element = std::move(element);
+  }
+  return result;
+}
+
 void ReplaceViewScene(
   ViewState& state,
   std::vector<std::shared_ptr<ViewCameraElement>> elements,
@@ -1411,6 +1797,258 @@ bool RenderCameraElement(
   return true;
 }
 
+void BlendPackedRgba(
+  std::uint8_t* destination,
+  std::uint32_t rgba,
+  double opacity)
+{
+  std::array<std::uint8_t, 4> source{
+    static_cast<std::uint8_t>((rgba >> 24U) & UINT32_C(255)),
+    static_cast<std::uint8_t>((rgba >> 16U) & UINT32_C(255)),
+    static_cast<std::uint8_t>((rgba >> 8U) & UINT32_C(255)),
+    static_cast<std::uint8_t>(std::clamp(
+      std::llround(static_cast<double>(rgba & UINT32_C(255)) * opacity),
+      INT64_C(0),
+      INT64_C(255)))
+  };
+  BlendRgba(destination, source.data());
+}
+
+template <typename PixelRenderer>
+void ForEachElementPixel(
+  const ViewCameraElement& element,
+  PixelRenderer&& render_pixel)
+{
+  constexpr double pi = 3.14159265358979323846;
+  const double radians = element.rotation_degrees * pi / 180.0;
+  const double cosine = std::cos(radians);
+  const double sine = std::sin(radians);
+  const double width_px = element.width * static_cast<double>(kViewComposedWidth);
+  const double height_px = element.height * static_cast<double>(kViewComposedHeight);
+  const double centre_x = (element.x + element.width * 0.5) * static_cast<double>(kViewComposedWidth);
+  const double centre_y = (element.y + element.height * 0.5) * static_cast<double>(kViewComposedHeight);
+  const double half_bounds_width = std::abs(cosine) * width_px * 0.5 + std::abs(sine) * height_px * 0.5;
+  const double half_bounds_height = std::abs(sine) * width_px * 0.5 + std::abs(cosine) * height_px * 0.5;
+  const auto min_x = static_cast<std::int32_t>(std::max(0.0, std::floor(centre_x - half_bounds_width)));
+  const auto max_x = static_cast<std::int32_t>(std::min(
+    static_cast<double>(kViewComposedWidth),
+    std::ceil(centre_x + half_bounds_width)));
+  const auto min_y = static_cast<std::int32_t>(std::max(0.0, std::floor(centre_y - half_bounds_height)));
+  const auto max_y = static_cast<std::int32_t>(std::min(
+    static_cast<double>(kViewComposedHeight),
+    std::ceil(centre_y + half_bounds_height)));
+
+  for (std::int32_t destination_y = min_y; destination_y < max_y; ++destination_y) {
+    for (std::int32_t destination_x = min_x; destination_x < max_x; ++destination_x) {
+      const double rotated_x = static_cast<double>(destination_x) + 0.5 - centre_x;
+      const double rotated_y = static_cast<double>(destination_y) + 0.5 - centre_y;
+      const double local_x = cosine * rotated_x + sine * rotated_y;
+      const double local_y = -sine * rotated_x + cosine * rotated_y;
+      const double u = local_x / width_px + 0.5;
+      const double v = local_y / height_px + 0.5;
+      if (u >= 0.0 && u < 1.0 && v >= 0.0 && v < 1.0) {
+        render_pixel(destination_x, destination_y, u, v, width_px, height_px);
+      }
+    }
+  }
+}
+
+bool RenderRasterElement(
+  const ViewCameraElement& element,
+  std::vector<std::uint8_t>& output)
+{
+  if (element.raster_width == 0U || element.raster_height == 0U
+      || element.raster_pixels.size()
+        < static_cast<std::size_t>(element.raster_width) * element.raster_height * 4U) {
+    return false;
+  }
+
+  const double source_aspect = static_cast<double>(element.raster_width) / element.raster_height;
+  const double destination_aspect = element.width * kViewComposedWidth
+    / (element.height * kViewComposedHeight);
+  double content_left = 0.0;
+  double content_top = 0.0;
+  double content_width = 1.0;
+  double content_height = 1.0;
+  double source_left = 0.0;
+  double source_top = 0.0;
+  double source_width = 1.0;
+  double source_height = 1.0;
+  if (element.fit_mode == RCH_VIEW_CAMERA_FIT_CONTAIN) {
+    if (source_aspect > destination_aspect) {
+      content_height = destination_aspect / source_aspect;
+      content_top = (1.0 - content_height) * 0.5;
+    } else {
+      content_width = source_aspect / destination_aspect;
+      content_left = (1.0 - content_width) * 0.5;
+    }
+  } else if (element.fit_mode == RCH_VIEW_CAMERA_FIT_COVER) {
+    if (source_aspect > destination_aspect) {
+      source_width = destination_aspect / source_aspect;
+      source_left = (1.0 - source_width) * 0.5;
+    } else {
+      source_height = source_aspect / destination_aspect;
+      source_top = (1.0 - source_height) * 0.5;
+    }
+  }
+
+  const auto render_pixel = [&](std::int32_t x, std::int32_t y, double u, double v) {
+    if (u < content_left || u >= content_left + content_width
+        || v < content_top || v >= content_top + content_height) {
+      return;
+    }
+    u = source_left + (u - content_left) / content_width * source_width;
+    v = source_top + (v - content_top) / content_height * source_height;
+    if (element.flip_horizontal) {
+      u = 1.0 - u;
+    }
+    if (element.flip_vertical) {
+      v = 1.0 - v;
+    }
+    const auto source_x = static_cast<std::uint32_t>(std::clamp(
+      u * element.raster_width,
+      0.0,
+      static_cast<double>(element.raster_width - 1U)));
+    const auto source_y = static_cast<std::uint32_t>(std::clamp(
+      v * element.raster_height,
+      0.0,
+      static_cast<double>(element.raster_height - 1U)));
+    const auto* source = element.raster_pixels.data()
+      + (static_cast<std::size_t>(source_y) * element.raster_width + source_x) * 4U;
+    auto* destination = output.data()
+      + static_cast<std::size_t>(y) * kViewComposedStride
+      + static_cast<std::size_t>(x) * 4U;
+    if (element.opacity == 1.0) {
+      BlendRgba(destination, source);
+    } else {
+      std::array<std::uint8_t, 4> adjusted{source[0], source[1], source[2], static_cast<std::uint8_t>(
+        std::clamp(std::llround(source[3] * element.opacity), INT64_C(0), INT64_C(255)))};
+      BlendRgba(destination, adjusted.data());
+    }
+  };
+
+  if (element.rotation_degrees == 0.0) {
+    const double left = element.x * kViewComposedWidth;
+    const double top = element.y * kViewComposedHeight;
+    const double width = element.width * kViewComposedWidth;
+    const double height = element.height * kViewComposedHeight;
+    const auto min_x = static_cast<std::int32_t>(std::max(0.0, std::floor(left)));
+    const auto max_x = static_cast<std::int32_t>(std::min(
+      static_cast<double>(kViewComposedWidth), std::ceil(left + width)));
+    const auto min_y = static_cast<std::int32_t>(std::max(0.0, std::floor(top)));
+    const auto max_y = static_cast<std::int32_t>(std::min(
+      static_cast<double>(kViewComposedHeight), std::ceil(top + height)));
+    for (auto y = min_y; y < max_y; ++y) {
+      const double v = (static_cast<double>(y) + 0.5 - top) / height;
+      if (v < 0.0 || v >= 1.0) {
+        continue;
+      }
+      for (auto x = min_x; x < max_x; ++x) {
+        const double u = (static_cast<double>(x) + 0.5 - left) / width;
+        if (u >= 0.0 && u < 1.0) {
+          render_pixel(x, y, u, v);
+        }
+      }
+    }
+  } else {
+    ForEachElementPixel(element, [&](std::int32_t x, std::int32_t y, double u, double v, double, double) {
+      render_pixel(x, y, u, v);
+    });
+  }
+  return true;
+}
+
+void RenderShapeElement(
+  const ViewCameraElement& element,
+  std::vector<std::uint8_t>& output)
+{
+  const auto render_pixel = [&](std::int32_t x, std::int32_t y, double u, double v, double width, double height) {
+    const double edge_distance = std::min(
+      std::min(u * width, (1.0 - u) * width),
+      std::min(v * height, (1.0 - v) * height));
+    std::uint32_t color = element.primary_rgba;
+    if (element.kind == RCH_VIEW_SCENE_ELEMENT_FRAME) {
+      if (edge_distance >= element.stroke_width) {
+        return;
+      }
+    } else if (element.secondary_enabled && element.stroke_width > 0.0
+               && edge_distance < element.stroke_width) {
+      color = element.secondary_rgba;
+    }
+    auto* destination = output.data()
+      + static_cast<std::size_t>(y) * kViewComposedStride
+      + static_cast<std::size_t>(x) * 4U;
+    BlendPackedRgba(destination, color, element.opacity);
+  };
+
+  if (element.rotation_degrees != 0.0) {
+    ForEachElementPixel(element, render_pixel);
+    return;
+  }
+
+  const double left = element.x * kViewComposedWidth;
+  const double top = element.y * kViewComposedHeight;
+  const double width = element.width * kViewComposedWidth;
+  const double height = element.height * kViewComposedHeight;
+  const double right = left + width;
+  const double bottom = top + height;
+  const auto min_x = static_cast<std::int32_t>(std::max(0.0, std::floor(left)));
+  const auto max_x = static_cast<std::int32_t>(std::min(
+    static_cast<double>(kViewComposedWidth), std::ceil(right)));
+  const auto min_y = static_cast<std::int32_t>(std::max(0.0, std::floor(top)));
+  const auto max_y = static_cast<std::int32_t>(std::min(
+    static_cast<double>(kViewComposedHeight), std::ceil(bottom)));
+
+  for (auto y = min_y; y < max_y; ++y) {
+    const double pixel_y = static_cast<double>(y) + 0.5;
+    if (pixel_y < top || pixel_y >= bottom) {
+      continue;
+    }
+    const double v = (pixel_y - top) / height;
+    if (element.kind != RCH_VIEW_SCENE_ELEMENT_FRAME) {
+      for (auto x = min_x; x < max_x; ++x) {
+        const double u = (static_cast<double>(x) + 0.5 - left) / width;
+        if (u >= 0.0 && u < 1.0) {
+          render_pixel(x, y, u, v, width, height);
+        }
+      }
+      continue;
+    }
+
+    const bool horizontal_border = std::min(pixel_y - top, bottom - pixel_y) < element.stroke_width;
+    if (horizontal_border) {
+      for (auto x = min_x; x < max_x; ++x) {
+        const double pixel_x = static_cast<double>(x) + 0.5;
+        if (pixel_x >= left && pixel_x < right) {
+          render_pixel(x, y, (pixel_x - left) / width, v, width, height);
+        }
+      }
+      continue;
+    }
+
+    for (auto x = min_x; x < max_x; ++x) {
+      const double pixel_x = static_cast<double>(x) + 0.5;
+      if (pixel_x < left) {
+        continue;
+      }
+      if (pixel_x >= right || pixel_x - left >= element.stroke_width) {
+        break;
+      }
+      render_pixel(x, y, (pixel_x - left) / width, v, width, height);
+    }
+    for (auto x = max_x - 1; x >= min_x; --x) {
+      const double pixel_x = static_cast<double>(x) + 0.5;
+      if (pixel_x >= right) {
+        continue;
+      }
+      if (pixel_x < left || right - pixel_x >= element.stroke_width) {
+        break;
+      }
+      render_pixel(x, y, (pixel_x - left) / width, v, width, height);
+    }
+  }
+}
+
 void PublishComposedFrame(ViewState& state)
 {
   auto* buffer = gst_buffer_new_allocate(nullptr, state.composed_pixels.size(), nullptr);
@@ -1500,6 +2138,18 @@ void RenderViewLoop(const std::shared_ptr<ViewState>& state)
 
     for (const auto& element : active_elements) {
       if (element == nullptr) {
+        continue;
+      }
+      if (element->kind != RCH_VIEW_SCENE_ELEMENT_CAMERA) {
+        if (!element->visible || !element->enabled) {
+          continue;
+        }
+        if (element->kind == RCH_VIEW_SCENE_ELEMENT_TEXT
+            || element->kind == RCH_VIEW_SCENE_ELEMENT_IMAGE) {
+          (void)RenderRasterElement(*element, state->composed_pixels);
+        } else {
+          RenderShapeElement(*element, state->composed_pixels);
+        }
         continue;
       }
       ++tick_stats.bound_source_count;
@@ -2628,6 +3278,69 @@ extern "C" rch_result rch_view_apply_camera_scene(
   }
 }
 
+extern "C" rch_result rch_view_apply_scene(
+  rch_view_handle view,
+  const rch_view_scene_element_v1* elements,
+  uint32_t element_count) noexcept
+{
+  if (view == nullptr) {
+    return RCH_RESULT_INVALID_HANDLE;
+  }
+  if (element_count > RCH_VIEW_MAX_SCENE_ELEMENTS
+      || (element_count > 0U && elements == nullptr)) {
+    return RCH_RESULT_INVALID_ARGUMENT;
+  }
+
+  try {
+    if (view->destroyed.load(std::memory_order_acquire) || view->state == nullptr) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+    if (!IsRegistryActive(view->state->registry)
+        || view->state->removed.load(std::memory_order_acquire)) {
+      return RCH_RESULT_INVALID_HANDLE;
+    }
+
+    std::unordered_set<std::string> element_ids;
+    std::vector<std::shared_ptr<ViewCameraElement>> candidate;
+    candidate.reserve(element_count);
+    std::size_t resource_bytes = 0U;
+    const auto element_stride = element_count == 0U ? sizeof(rch_view_scene_element_v1)
+                                                    : elements[0].struct_size;
+    if (element_stride < sizeof(rch_view_scene_element_v1)
+        || element_stride > UINT32_C(65536)
+        || element_stride % alignof(rch_view_scene_element_v1) != 0U) {
+      return RCH_RESULT_INVALID_ARGUMENT;
+    }
+    const auto* element_bytes = reinterpret_cast<const std::uint8_t*>(elements);
+    for (std::uint32_t index = 0; index < element_count; ++index) {
+      const auto& config = *reinterpret_cast<const rch_view_scene_element_v1*>(
+        element_bytes + static_cast<std::size_t>(index) * element_stride);
+      if (!IsValidSceneElement(config)
+          || config.struct_size != element_stride
+          || !element_ids.emplace(config.element_id_utf8).second) {
+        return RCH_RESULT_INVALID_ARGUMENT;
+      }
+      std::shared_ptr<ViewCameraElement> element;
+      const auto result = MakeSceneElement(config, view->state->registry, element);
+      if (result != RCH_RESULT_OK) {
+        return result;
+      }
+      resource_bytes += element->raster_pixels.size();
+      if (resource_bytes > kMaximumSceneResourceBytes) {
+        return RCH_RESULT_OUT_OF_MEMORY;
+      }
+      candidate.push_back(std::move(element));
+    }
+
+    ReplaceViewScene(*view->state, std::move(candidate), false);
+    return RCH_RESULT_OK;
+  } catch (const std::bad_alloc&) {
+    return RCH_RESULT_OUT_OF_MEMORY;
+  } catch (...) {
+    return RCH_RESULT_INTERNAL_ERROR;
+  }
+}
+
 extern "C" rch_result rch_view_get_status(
   rch_view_handle view,
   rch_view_status_v1* out_status) noexcept
@@ -2675,8 +3388,11 @@ extern "C" rch_result rch_view_get_status(
 
     std::lock_guard source_lock(view->state->mutex);
     for (const auto& source : view->state->scene_elements) {
+      if (source == nullptr || source->kind != RCH_VIEW_SCENE_ELEMENT_CAMERA) {
+        continue;
+      }
       ++status.bound_source_count;
-      auto camera = source == nullptr ? nullptr : source->camera.lock();
+      auto camera = source->camera.lock();
       if (camera == nullptr || camera->ingest == nullptr || camera->removed.load(std::memory_order_acquire)) {
         ++status.stale_or_missing_source_count;
         continue;

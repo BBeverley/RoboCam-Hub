@@ -94,6 +94,85 @@ public sealed class NativeView : IDisposable
         }
     }
 
+    public unsafe NativeResult ApplyScene(IReadOnlyList<NativeSceneElementConfig> elements)
+    {
+        ArgumentNullException.ThrowIfNull(elements);
+        if (elements.Count > 256)
+        {
+            throw new ArgumentOutOfRangeException(nameof(elements));
+        }
+        if (elements.Count == 0)
+        {
+            return NativeMethods.ViewApplyScene(GetHandleOrThrow(), null, 0);
+        }
+
+        var nativeElements = new NativeSceneElementConfigV1[elements.Count];
+        var allocatedStrings = new List<nint>(elements.Count * 6);
+        try
+        {
+            byte* Allocate(string? value)
+            {
+                if (value is null)
+                {
+                    return null;
+                }
+                var pointer = Marshal.StringToCoTaskMemUTF8(value);
+                allocatedStrings.Add(pointer);
+                return (byte*)pointer;
+            }
+
+            for (var index = 0; index < elements.Count; index++)
+            {
+                var element = elements[index];
+                nativeElements[index] = new NativeSceneElementConfigV1
+                {
+                    struct_size = (uint)Marshal.SizeOf<NativeSceneElementConfigV1>(),
+                    struct_version = NativeMethods.ViewSceneElementVersion,
+                    kind = element.Kind,
+                    element_id_utf8 = Allocate(ValidateText(element.ElementId, nameof(elements), "Scene element ID")),
+                    camera_id_utf8 = Allocate(element.CameraId),
+                    image_asset_id_utf8 = Allocate(element.ImageAssetId),
+                    image_source_utf8 = Allocate(element.ImageSource),
+                    text_utf8 = Allocate(element.Text),
+                    font_family_utf8 = Allocate(element.FontFamily),
+                    x = element.X,
+                    y = element.Y,
+                    width = element.Width,
+                    height = element.Height,
+                    rotation_degrees = element.RotationDegrees,
+                    z_order = element.ZOrder,
+                    fit_mode = element.FitMode,
+                    flip_horizontal = element.FlipHorizontal ? 1U : 0U,
+                    flip_vertical = element.FlipVertical ? 1U : 0U,
+                    visible = element.Visible ? 1U : 0U,
+                    enabled = element.Enabled ? 1U : 0U,
+                    opacity = element.Opacity,
+                    primary_rgba = element.PrimaryRgba,
+                    secondary_rgba = element.SecondaryRgba,
+                    secondary_enabled = element.SecondaryEnabled ? 1U : 0U,
+                    stroke_width = element.StrokeWidth,
+                    font_size = element.FontSize,
+                    text_alignment = element.TextAlignment,
+                    text_weight = element.TextWeight,
+                    text_style = element.TextStyle,
+                    text_vertical_alignment = element.TextVerticalAlignment,
+                    text_underline = element.TextUnderline ? 1U : 0U,
+                };
+            }
+            fixed (NativeSceneElementConfigV1* pointer = nativeElements)
+            {
+                return NativeMethods.ViewApplyScene(GetHandleOrThrow(), pointer, (uint)nativeElements.Length);
+            }
+        }
+        finally
+        {
+            foreach (var pointer in allocatedStrings)
+            {
+                Marshal.FreeCoTaskMem(pointer);
+            }
+        }
+    }
+
     public NativeResult TryGetStatus(out NativeViewStatus status)
     {
         var nativeStatus = new NativeViewStatusV1

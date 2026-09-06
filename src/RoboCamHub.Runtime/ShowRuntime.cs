@@ -84,13 +84,8 @@ public sealed class ShowRuntime : IDisposable
         {
             foreach (var element in definition.SceneElements)
             {
-                if (element is not CameraElementDefinition cameraElement)
-                {
-                    throw new NotSupportedException(
-                        $"Scene element type '{element.GetType().Name}' is not supported by Gate 6A.");
-                }
-
-                if (!_cameras.ContainsKey(cameraElement.CameraId))
+                if (element is CameraElementDefinition cameraElement
+                    && !_cameras.ContainsKey(cameraElement.CameraId))
                 {
                     throw new RuntimeReferenceException(
                         $"View '{definition.Id}' element '{element.Id}' references missing camera '{cameraElement.CameraId}'.");
@@ -125,11 +120,7 @@ public sealed class ShowRuntime : IDisposable
             {
                 RuntimeGuard.EnsureSuccess(
                     $"Applying View '{definition.Id}' scene",
-                    nativeView.ApplyCameraScene(
-                        definition.SceneElements
-                            .Cast<CameraElementDefinition>()
-                            .Select(ViewRuntime.ToNative)
-                            .ToArray()));
+                    nativeView.ApplyScene(ViewRuntime.ToNativeScene(definition, this)));
             }
 
             var runtime = new ViewRuntime(this, nativeView, definition);

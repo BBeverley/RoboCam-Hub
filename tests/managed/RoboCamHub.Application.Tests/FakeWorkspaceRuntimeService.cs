@@ -145,6 +145,7 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
     public async Task ApplyViewSceneAsync(
         string viewId,
         IReadOnlyList<ViewSceneElementDefinition> elements,
+        IReadOnlyList<AssetDefinition>? assets = null,
         CancellationToken cancellationToken = default)
     {
         ApplyViewSceneCallCount++;
@@ -161,12 +162,12 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         {
             throw new KeyNotFoundException($"View '{viewId}' is not part of this workspace.");
         }
-        foreach (var cameraElement in elements.Cast<CameraElementDefinition>())
+        foreach (var cameraElement in elements.OfType<CameraElementDefinition>())
         {
             _ = _cameras.Single(camera => camera.Id == cameraElement.CameraId);
         }
         var current = _views[index];
-        _views[index] = new ViewDefinition(current.Id, current.Name, elements);
+        _views[index] = new ViewDefinition(current.Id, current.Name, elements, assets ?? current.Assets);
         LastAppliedScene = [.. elements];
     }
 

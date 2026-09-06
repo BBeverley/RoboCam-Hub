@@ -124,4 +124,47 @@ public sealed class NativeViewOutputInteropTests
             Assert.Equal((uint)2, afterInvalid.BoundSourceCount);
         }
     }
+
+    [Fact]
+    public void MixedSceneInteropMarshalsUtf8TextAndKeepsCameraOwnershipZero()
+    {
+        using var engine = NativeEngine.Create();
+        Assert.Equal(NativeResult.Ok, engine.TryCreateView("view-visual", out var view));
+        Assert.NotNull(view);
+        using (view)
+        {
+            NativeSceneElementConfig[] scene =
+            [
+                new(
+                    NativeSceneElementKind.Rectangle,
+                    "background",
+                    0, 0, 1, 1, 0,
+                    PrimaryRgba: 0x102030FF),
+                new(
+                    NativeSceneElementKind.Text,
+                    "title-✓",
+                    0.1, 0.1, 0.8, 0.2, 1,
+                    Text: "RoboCam 日本 ✓",
+                    FontFamily: "Sans",
+                    PrimaryRgba: 0xFFFFFFFF,
+                    FontSize: 64,
+                    TextAlignment: NativeTextAlignment.Center,
+                    TextVerticalAlignment: NativeTextVerticalAlignment.Bottom,
+                    TextUnderline: true),
+                new(
+                    NativeSceneElementKind.Frame,
+                    "frame",
+                    0.05, 0.05, 0.9, 0.9, 2,
+                    PrimaryRgba: 0xFFFFFFFF,
+                    StrokeWidth: 8),
+            ];
+
+            Assert.Equal(NativeResult.Ok, view.ApplyScene(scene));
+            Assert.Equal(NativeResult.Ok, view.TryGetStatus(out var status));
+            Assert.Equal(0U, status.BoundSourceCount);
+            Assert.Equal(NativeResult.Ok, engine.TryGetEngineDiagnostics(out var diagnostics));
+            Assert.Equal(0U, diagnostics.ActiveRtspSessionTotal);
+            Assert.Equal(0U, diagnostics.ActiveDecoderTotal);
+        }
+    }
 }

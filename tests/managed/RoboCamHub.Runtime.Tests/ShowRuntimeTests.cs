@@ -7,6 +7,36 @@ namespace RoboCamHub.Runtime.Tests;
 public sealed class ShowRuntimeTests
 {
     [Fact]
+    public void MixedVisualSceneMapsToOneNativeViewWithoutAdditionalCameraOwnership()
+    {
+        var factory = new RecordingNativeRuntimeFactory();
+        using var runtime = ShowRuntime.Create(factory);
+        runtime.AddCamera(new CameraDefinition("camera-1", "Camera", "rtsp://127.0.0.1/profile2/media.smp"));
+        var asset = new AssetDefinition("asset", "logo.png", AssetMediaType.Png, "/runtime/logo.png", 2, 1);
+        var view = runtime.AddView(new ViewDefinition(
+            "mixed",
+            "Mixed",
+            [
+                new ShapeElementDefinition("background", 0, 0, 1, 1, -1, 0x102030FF),
+                new CameraElementDefinition("camera", "camera-1", 0, 0, 1, 1),
+                new TextElementDefinition(
+                    "text", "Title", 0, 0, 1, 0.2, 1,
+                    verticalAlignment: TextElementVerticalAlignment.Bottom,
+                    underline: true),
+                new ImageElementDefinition("image", asset.Id, 0.8, 0.8, 0.2, 0.2, 2),
+                new FrameElementDefinition("frame", 0, 0, 1, 1, 3, 0xFFFFFFFF),
+            ],
+            [asset]));
+
+        Assert.Equal(1U, view.GetStatus().BoundSourceCount);
+        Assert.Contains("view:apply-scene:mixed:5", factory.Events);
+        Assert.Equal(1U, runtime.GetDiagnostics().TotalBoundViewSourceCount);
+        var nativeText = Assert.Single(
+            factory.Engine!.LastAppliedScene!, element => element.Kind == NativeSceneElementKind.Text);
+        Assert.Equal(NativeTextVerticalAlignment.Bottom, nativeText.TextVerticalAlignment);
+        Assert.True(nativeText.TextUnderline);
+    }
+    [Fact]
     public void CameraRuntimeMapsDefinitionAndOperationsToNativeInteropBoundary()
     {
         var factory = new RecordingNativeRuntimeFactory();

@@ -33,7 +33,7 @@ public sealed class NativeInteropIntegrationTests
         Assert.Equal(NativeAbiVersion.Supported, exception.Expected);
         Assert.Equal(incompatibleVersion, exception.Actual);
         Assert.Equal(
-            "Native ABI version mismatch. Expected 1.9, but loaded 2.0.",
+            "Native ABI version mismatch. Expected 1.10, but loaded 2.0.",
             exception.Message);
     }
 

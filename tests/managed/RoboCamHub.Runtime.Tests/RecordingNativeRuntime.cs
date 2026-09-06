@@ -23,6 +23,8 @@ internal sealed class RecordingNativeRuntimeEngine(List<string> events) : INativ
     private readonly List<RecordingNativeRuntimeView> _views = [];
 
     public int AddCameraCallCount { get; private set; }
+    public IReadOnlyList<NativeSceneElementConfig>? LastAppliedScene
+        => _views.LastOrDefault()?.LastAppliedScene;
 
     public NativeResult AddOrUpdateCamera(in NativeCameraConfig config)
     {
@@ -124,6 +126,7 @@ internal sealed class RecordingNativeRuntimeView(List<string> events, string vie
     public int BindingCount => IsDisposed ? 0 : _bindings.Count;
 
     public int OutputConsumerCount { get; private set; }
+    public IReadOnlyList<NativeSceneElementConfig>? LastAppliedScene { get; private set; }
 
     public NativeResult ApplyCameraScene(IReadOnlyList<NativeCameraElementConfig> elements)
     {
@@ -131,6 +134,20 @@ internal sealed class RecordingNativeRuntimeView(List<string> events, string vie
         foreach (var (element, index) in elements.Select((element, index) => (element, index)))
         {
             _bindings[(uint)index] = element.CameraId;
+        }
+        events.Add($"view:apply-scene:{viewId}:{elements.Count}");
+        return NativeResult.Ok;
+    }
+
+    public NativeResult ApplyScene(IReadOnlyList<NativeSceneElementConfig> elements)
+    {
+        LastAppliedScene = elements.ToArray();
+        _bindings.Clear();
+        foreach (var (element, index) in elements
+                     .Where(element => element.Kind == NativeSceneElementKind.Camera)
+                     .Select((element, index) => (element, index)))
+        {
+            _bindings[(uint)index] = element.CameraId!;
         }
         events.Add($"view:apply-scene:{viewId}:{elements.Count}");
         return NativeResult.Ok;

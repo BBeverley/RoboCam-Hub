@@ -1,0 +1,95 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:RoboCamHub.Application;assembly=RoboCamHub.Application"
+        x:Class="RoboCamHub.App.VisualElementPropertiesWindow"
+        x:DataType="vm:ViewEditorViewModel"
+        Width="620" Height="760" CanResize="False" Background="#111820"
+        Title="Visual element properties">
+    <Grid RowDefinitions="Auto,*,Auto" Margin="20" RowSpacing="16">
+        <StackPanel Grid.Row="0" Spacing="3">
+            <TextBlock FontSize="20" FontWeight="SemiBold"
+                       Text="{Binding ActiveVisualProperties.TypeLabel, StringFormat='{}{} element properties'}" />
+            <TextBlock Foreground="#AAB7C4" Text="Geometry is normalized to the 1920×1080 View." />
+        </StackPanel>
+        <ScrollViewer Grid.Row="1">
+            <StackPanel Spacing="12">
+                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="18" RowSpacing="10">
+                    <StackPanel Grid.Row="0" Grid.Column="0"><TextBlock Text="X"/><NumericUpDown Value="{Binding ActiveVisualProperties.X, Mode=TwoWay}" Minimum="-16" Maximum="16" Increment="0.001"/></StackPanel>
+                    <StackPanel Grid.Row="0" Grid.Column="1"><TextBlock Text="Y"/><NumericUpDown Value="{Binding ActiveVisualProperties.Y, Mode=TwoWay}" Minimum="-16" Maximum="16" Increment="0.001"/></StackPanel>
+                    <StackPanel Grid.Row="1" Grid.Column="0"><TextBlock Text="Width"/><NumericUpDown Value="{Binding ActiveVisualProperties.Width, Mode=TwoWay}" Minimum="0.016667" Maximum="16" Increment="0.001"/></StackPanel>
+                    <StackPanel Grid.Row="1" Grid.Column="1"><TextBlock Text="Height"/><NumericUpDown Value="{Binding ActiveVisualProperties.Height, Mode=TwoWay}" Minimum="0.016667" Maximum="16" Increment="0.001"/></StackPanel>
+                    <StackPanel Grid.Row="2" Grid.Column="0"><TextBlock Text="Rotation"/><NumericUpDown Value="{Binding ActiveVisualProperties.RotationDegrees, Mode=TwoWay}" Minimum="-360" Maximum="360" Increment="1"/></StackPanel>
+                    <StackPanel Grid.Row="2" Grid.Column="1"><TextBlock Text="Z-order"/><NumericUpDown Value="{Binding ActiveVisualProperties.ZOrder, Mode=TwoWay}" Minimum="-1000000" Maximum="1000000" Increment="1"/></StackPanel>
+                </Grid>
+                <CheckBox Content="Visible" IsChecked="{Binding ActiveVisualProperties.Visible, Mode=TwoWay}" />
+                <StackPanel Orientation="Horizontal" Spacing="18" IsVisible="{Binding ActiveVisualProperties.SupportsFlip}">
+                    <CheckBox Content="Flip horizontal" IsChecked="{Binding ActiveVisualProperties.FlipHorizontal, Mode=TwoWay}"/>
+                    <CheckBox Content="Flip vertical" IsChecked="{Binding ActiveVisualProperties.FlipVertical, Mode=TwoWay}"/>
+                </StackPanel>
+                <StackPanel Spacing="8" IsVisible="{Binding ActiveVisualProperties.IsText}">
+                    <TextBlock Text="Text"/><TextBox Text="{Binding ActiveVisualProperties.Text, Mode=TwoWay}" AcceptsReturn="True" Height="80" TextWrapping="Wrap"/>
+                    <TextBlock Text="Font family"/>
+                    <ComboBox x:Name="FontFamilyPicker"
+                              SelectedItem="{Binding ActiveVisualProperties.FontFamily, Mode=TwoWay}"/>
+                    <TextBlock Text="Font size"/><NumericUpDown Value="{Binding ActiveVisualProperties.FontSize, Mode=TwoWay}" Minimum="1" Maximum="512"/>
+                    <Grid ColumnDefinitions="Auto,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="18" RowSpacing="6">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Horizontal" Foreground="#AAB7C4"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="Vertical" Foreground="#AAB7C4"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="Style" Foreground="#AAB7C4"/>
+                        <StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Spacing="3">
+                            <ToggleButton Width="38" Content="⇤" ToolTip.Tip="Align left" IsChecked="{Binding ActiveVisualProperties.AlignLeft, Mode=TwoWay}"/>
+                            <ToggleButton Width="38" Content="↔" ToolTip.Tip="Align centre" IsChecked="{Binding ActiveVisualProperties.AlignCenter, Mode=TwoWay}"/>
+                            <ToggleButton Width="38" Content="⇥" ToolTip.Tip="Align right" IsChecked="{Binding ActiveVisualProperties.AlignRight, Mode=TwoWay}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="3">
+                            <ToggleButton Width="38" Content="⇡" ToolTip.Tip="Align top" IsChecked="{Binding ActiveVisualProperties.AlignTop, Mode=TwoWay}"/>
+                            <ToggleButton Width="38" Content="↕" ToolTip.Tip="Align middle" IsChecked="{Binding ActiveVisualProperties.AlignMiddle, Mode=TwoWay}"/>
+                            <ToggleButton Width="38" Content="⇣" ToolTip.Tip="Align bottom" IsChecked="{Binding ActiveVisualProperties.AlignBottom, Mode=TwoWay}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Spacing="3">
+                            <ToggleButton Width="38" Content="B" FontWeight="Bold" ToolTip.Tip="Bold" IsChecked="{Binding ActiveVisualProperties.IsBold, Mode=TwoWay}"/>
+                            <ToggleButton Width="38" Content="I" FontStyle="Italic" ToolTip.Tip="Italic" IsChecked="{Binding ActiveVisualProperties.IsItalic, Mode=TwoWay}"/>
+                            <ToggleButton Width="38" ToolTip.Tip="Underline" IsChecked="{Binding ActiveVisualProperties.IsUnderline, Mode=TwoWay}">
+                                <TextBlock Text="U" TextDecorations="Underline"/>
+                            </ToggleButton>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+                <StackPanel Spacing="8" IsVisible="{Binding ActiveVisualProperties.IsImage}">
+                    <TextBlock Text="Fit mode"/><ComboBox ItemsSource="{Binding ActiveVisualProperties.FitModes}" SelectedItem="{Binding ActiveVisualProperties.FitMode, Mode=TwoWay}"/>
+                </StackPanel>
+                <StackPanel Spacing="6" IsVisible="{Binding ActiveVisualProperties.HasPrimaryColor}">
+                    <TextBlock Text="{Binding ActiveVisualProperties.PrimaryColorLabel}"/>
+                    <ColorPicker x:Name="PrimaryColorPicker" IsAlphaEnabled="True"/>
+                </StackPanel>
+                <StackPanel Spacing="6" IsVisible="{Binding ActiveVisualProperties.HasSecondaryColor}">
+                    <CheckBox Content="{Binding ActiveVisualProperties.SecondaryColorLabel}"
+                              IsChecked="{Binding ActiveVisualProperties.SecondaryColorEnabled, Mode=TwoWay}"/>
+                    <ColorPicker x:Name="SecondaryColorPicker"
+                                 IsAlphaEnabled="True"
+                                 IsEnabled="{Binding ActiveVisualProperties.SecondaryColorEnabled}"/>
+                </StackPanel>
+                <StackPanel Spacing="8" IsVisible="{Binding ActiveVisualProperties.IsRectangle}">
+                    <TextBlock Text="Outline width (pixels)"/><NumericUpDown Value="{Binding ActiveVisualProperties.StrokeWidth, Mode=TwoWay}" Minimum="0" Maximum="512"/>
+                </StackPanel>
+                <StackPanel Spacing="8" IsVisible="{Binding ActiveVisualProperties.IsFrame}">
+                    <TextBlock Text="Frame thickness (pixels)"/><NumericUpDown Value="{Binding ActiveVisualProperties.StrokeWidth, Mode=TwoWay}" Minimum="1" Maximum="512"/>
+                </StackPanel>
+                <StackPanel Spacing="4" IsVisible="{Binding ActiveVisualProperties.IsImage}">
+                    <TextBlock Text="Opacity"/><NumericUpDown Value="{Binding ActiveVisualProperties.Opacity, Mode=TwoWay}" Minimum="0" Maximum="1" Increment="0.05"/>
+                </StackPanel>
+                <StackPanel Spacing="4" IsVisible="{Binding ActiveVisualProperties.IsRectangle}">
+                    <TextBlock Text="Opacity"/><NumericUpDown Value="{Binding ActiveVisualProperties.Opacity, Mode=TwoWay}" Minimum="0" Maximum="1" Increment="0.05"/>
+                </StackPanel>
+                <StackPanel Spacing="4" IsVisible="{Binding ActiveVisualProperties.IsFrame}">
+                    <TextBlock Text="Opacity"/><NumericUpDown Value="{Binding ActiveVisualProperties.Opacity, Mode=TwoWay}" Minimum="0" Maximum="1" Increment="0.05"/>
+                </StackPanel>
+                <TextBlock Foreground="#F6A0A0" IsVisible="{Binding HasOperatorMessage}" Text="{Binding OperatorMessage}" TextWrapping="Wrap"/>
+            </StackPanel>
+        </ScrollViewer>
+        <StackPanel Grid.Row="2" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="10">
+            <Button Padding="18,8" Content="Cancel" Click="OnCancel" />
+            <Button x:Name="ApplyButton" Padding="18,8" Content="Apply" Click="OnApply" />
+        </StackPanel>
+    </Grid>
+</Window>

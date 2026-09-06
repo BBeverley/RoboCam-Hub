@@ -105,7 +105,7 @@
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel VerticalAlignment="Center" Spacing="2">
                         <TextBlock FontSize="22" FontWeight="SemiBold" Text="{Binding ApplicationTitle}" />
-                        <TextBlock Classes="secondary" Text="View templates and interactive freeform editor · Gate 6C" />
+                        <TextBlock Classes="secondary" Text="Mixed camera, text, image, shape and frame editor · Gate 6D" />
                     </StackPanel>
                     <Border Grid.Column="1"
                             VerticalAlignment="Center"
@@ -244,7 +244,7 @@
                         </Grid>
 
                         <Border Grid.Row="1" Background="#111820" CornerRadius="6" Padding="8">
-                            <Grid ColumnDefinitions="220,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
+                            <Grid ColumnDefinitions="220,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
                                 <ComboBox Grid.Column="0"
                                           ItemsSource="{Binding SelectedView.Editor.Elements}"
                                           SelectedItem="{Binding SelectedView.Editor.SelectedElement, Mode=OneWay}"
@@ -256,12 +256,23 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
-                                <Button Grid.Column="1" Classes="compact" Content="Properties…" Click="OnProperties" />
-                                <Button Grid.Column="2" Classes="compact" Content="Duplicate" Click="OnDuplicate" />
-                                <Button Grid.Column="3" Classes="compact" Content="Delete" Click="OnDeleteElement" />
-                                <Button Grid.Column="4" Classes="compact" Content="Send Backward" Click="OnSendBackward" />
-                                <Button Grid.Column="5" Classes="compact" Content="Bring Forward" Click="OnBringForward" />
-                                <TextBlock Grid.Column="6"
+                                <Button Grid.Column="1" Classes="compact" Content="Add ▾">
+                                    <Button.Flyout>
+                                        <MenuFlyout>
+                                            <MenuItem Header="Camera…" Click="OnAddCamera" />
+                                            <MenuItem Header="Text" Click="OnAddText" />
+                                            <MenuItem Header="Image…" Click="OnAddImage" />
+                                            <MenuItem Header="Rectangle" Click="OnAddRectangle" />
+                                            <MenuItem Header="Frame" Click="OnAddFrame" />
+                                        </MenuFlyout>
+                                    </Button.Flyout>
+                                </Button>
+                                <Button Grid.Column="2" Classes="compact" Content="Properties…" Click="OnProperties" />
+                                <Button Grid.Column="3" Classes="compact" Content="Duplicate" Click="OnDuplicate" />
+                                <Button Grid.Column="4" Classes="compact" Content="Delete" Click="OnDeleteElement" />
+                                <Button Grid.Column="5" Classes="compact" Content="Send Backward" Click="OnSendBackward" />
+                                <Button Grid.Column="6" Classes="compact" Content="Bring Forward" Click="OnBringForward" />
+                                <TextBlock Grid.Column="7"
                                            VerticalAlignment="Center"
                                            Classes="secondary"
                                            Text="Drag to move · corner handles resize · Shift unlocks aspect · arrow keys nudge" />

@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using RoboCamHub.Application;
+using RoboCamHub.Domain;
 
 namespace RoboCamHub.App;
 
@@ -250,11 +251,19 @@ internal sealed class ViewEditorCanvas : Control
     {
         var points = GetElementCorners(viewport, element.Geometry.VisibleCorners);
         var geometry = CreatePolygon(points);
-        var fill = ElementBrushes[Math.Abs(StringComparer.Ordinal.GetHashCode(element.CameraId)) % ElementBrushes.Length];
-        context.DrawGeometry(fill, new Pen(new SolidColorBrush(Color.Parse("#63829A")), 1), geometry);
+        var hash = StringComparer.Ordinal.GetHashCode(element.BrushKey) & int.MaxValue;
+        var fill = ElementBrushes[hash % ElementBrushes.Length];
+        if (element.Definition is FrameElementDefinition)
+        {
+            context.DrawGeometry(null, new Pen(fill, 5), geometry);
+        }
+        else
+        {
+            context.DrawGeometry(fill, new Pen(new SolidColorBrush(Color.Parse("#63829A")), 1), geometry);
+        }
 
         var text = new FormattedText(
-            $"{element.CameraName}\nZ {element.ZOrder}",
+            $"{element.KindLabel}: {element.DisplayName}\nZ {element.ZOrder}",
             CultureInfo.CurrentCulture,
             FlowDirection.LeftToRight,
             new Typeface("Inter", FontStyle.Normal, FontWeight.SemiBold),
@@ -359,8 +368,14 @@ internal sealed class ViewEditorCanvas : Control
 
         var properties = new MenuItem { Header = "Properties…" };
         properties.Click += (_, _) => PropertiesRequested?.Invoke(this, EventArgs.Empty);
-        var locate = new MenuItem { Header = "Locate Source" };
-        locate.Click += (_, _) => LocateSourceRequested?.Invoke(this, selected.CameraId);
+        var locate = new MenuItem { Header = "Locate Source", IsVisible = selected.CameraId is not null };
+        locate.Click += (_, _) =>
+        {
+            if (selected.CameraId is not null)
+            {
+                LocateSourceRequested?.Invoke(this, selected.CameraId);
+            }
+        };
         var duplicate = new MenuItem { Header = "Duplicate" };
         duplicate.Click += async (_, _) => await Editor.DuplicateSelectedAsync();
         var forward = new MenuItem { Header = "Bring Forward" };

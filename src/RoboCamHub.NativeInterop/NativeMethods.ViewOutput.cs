@@ -139,6 +139,43 @@ internal unsafe struct NativeCameraElementConfigV1
     public fixed uint reserved[4];
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct NativeSceneElementConfigV1
+{
+    public uint struct_size;
+    public uint struct_version;
+    public NativeSceneElementKind kind;
+    public byte* element_id_utf8;
+    public byte* camera_id_utf8;
+    public byte* image_asset_id_utf8;
+    public byte* image_source_utf8;
+    public byte* text_utf8;
+    public byte* font_family_utf8;
+    public double x;
+    public double y;
+    public double width;
+    public double height;
+    public double rotation_degrees;
+    public int z_order;
+    public NativeCameraElementFitMode fit_mode;
+    public uint flip_horizontal;
+    public uint flip_vertical;
+    public uint visible;
+    public uint enabled;
+    public double opacity;
+    public uint primary_rgba;
+    public uint secondary_rgba;
+    public uint secondary_enabled;
+    public double stroke_width;
+    public double font_size;
+    public NativeTextAlignment text_alignment;
+    public NativeTextWeight text_weight;
+    public NativeTextStyle text_style;
+    public NativeTextVerticalAlignment text_vertical_alignment;
+    public uint text_underline;
+    public fixed uint reserved[6];
+}
+
 internal static partial class NativeMethods
 {
     internal const uint ViewStatusVersion = 3;
@@ -147,6 +184,7 @@ internal static partial class NativeMethods
     internal const uint ViewPreviewConfigVersion = 1;
     internal const uint ViewPreviewStatusVersion = 1;
     internal const uint ViewCameraElementVersion = 1;
+    internal const uint ViewSceneElementVersion = 1;
 
     [LibraryImport(LibraryName, EntryPoint = "rch_view_create", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial NativeResult ViewCreate(
@@ -170,6 +208,12 @@ internal static partial class NativeMethods
     internal static unsafe partial NativeResult ViewApplyCameraScene(
         NativeViewHandle view,
         NativeCameraElementConfigV1* elements,
+        uint elementCount);
+
+    [LibraryImport(LibraryName, EntryPoint = "rch_view_apply_scene")]
+    internal static unsafe partial NativeResult ViewApplyScene(
+        NativeViewHandle view,
+        NativeSceneElementConfigV1* elements,
         uint elementCount);
 
     [LibraryImport(LibraryName, EntryPoint = "rch_view_get_status")]

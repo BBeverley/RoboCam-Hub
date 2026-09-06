@@ -180,6 +180,16 @@ one swap; failure retains the previous live scene. Preview and NDI continue to
 consume the same one latest composed View frame. See
 `docs/28-gate-6a-view-scene-transform-foundation.md`.
 
+## Gate 6D static visual element status
+
+Gate 6D adds native UTF-8 text, retained PNG/JPEG images, filled/outlined
+rectangles and border-only frames to the same atomic ordered scene. Static
+resources are prepared once per successful scene apply under explicit 64 MiB
+per-resource and 256 MiB per-View bounds, then reused by the existing render
+loop. Preview and NDI therefore see identical clean pixels without managed
+frame transport or added camera ownership. See
+`docs/31-gate-6d-text-image-shape-frame-elements.md` and ADR 0003.
+
 ## Multiple Views
 
 Users may create any practical number of Views. Examples:

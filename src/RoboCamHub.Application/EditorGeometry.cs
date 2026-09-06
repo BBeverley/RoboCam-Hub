@@ -59,7 +59,7 @@ public static class ViewEditorGeometry
     public const double CanvasAspectRatio = 16d / 9d;
 
     public static EditorElementGeometry Calculate(
-        CameraElementDefinition element,
+        ViewSceneElementDefinition element,
         uint sourcePixelWidth,
         uint sourcePixelHeight)
     {
@@ -67,7 +67,13 @@ public static class ViewEditorGeometry
 
         var destination = new EditorRectangle(element.X, element.Y, element.Width, element.Height);
         var visible = destination;
-        if (element.FitMode == CameraElementFitMode.Contain)
+        var fitMode = element switch
+        {
+            CameraElementDefinition camera => camera.FitMode,
+            ImageElementDefinition image => image.FitMode,
+            _ => CameraElementFitMode.Stretch,
+        };
+        if (fitMode == CameraElementFitMode.Contain)
         {
             var sourceAspect = SourceAspectAfterCrop(element, sourcePixelWidth, sourcePixelHeight);
             var destinationAspect = element.Width * CanvasAspectRatio / element.Height;
@@ -122,16 +128,18 @@ public static class ViewEditorGeometry
         ];
 
     private static double SourceAspectAfterCrop(
-        CameraElementDefinition element,
+        ViewSceneElementDefinition element,
         uint sourcePixelWidth,
         uint sourcePixelHeight)
     {
         var sourceAspect = sourcePixelWidth > 0 && sourcePixelHeight > 0
             ? (double)sourcePixelWidth / sourcePixelHeight
             : CanvasAspectRatio;
-        return sourceAspect
-               * (1 - element.CropLeft - element.CropRight)
-               / (1 - element.CropTop - element.CropBottom);
+        return element is CameraElementDefinition camera
+            ? sourceAspect
+              * (1 - camera.CropLeft - camera.CropRight)
+              / (1 - camera.CropTop - camera.CropBottom)
+            : sourceAspect;
     }
 }
 

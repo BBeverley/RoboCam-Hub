@@ -24,6 +24,12 @@ pkg_check_modules(
   gstreamer-1.0>=1.24
   gstreamer-app-1.0>=1.24
 )
+pkg_check_modules(
+  PANGOCAIRO
+  REQUIRED
+  IMPORTED_TARGET
+  pangocairo>=1.50
+)
 
 # Keep Windows test executables beside the shared-library DLL. The same layout
 # also gives macOS and other generators predictable build artefact locations.
@@ -88,7 +94,13 @@ target_include_directories(robocamhub_native
   PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
-target_link_libraries(robocamhub_native PRIVATE PkgConfig::GSTREAMER Threads::Threads)
+target_link_libraries(
+  robocamhub_native
+  PRIVATE
+    PkgConfig::GSTREAMER
+    PkgConfig::PANGOCAIRO
+    Threads::Threads
+)
 
 set(RCH_HAS_NDI_SDK OFF)
 if(RCH_ENABLE_NDI_SDK)

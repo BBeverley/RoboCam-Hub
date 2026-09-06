@@ -171,7 +171,9 @@ internal unsafe struct NativeSceneElementConfigV1
     public NativeTextAlignment text_alignment;
     public NativeTextWeight text_weight;
     public NativeTextStyle text_style;
-    public fixed uint reserved[8];
+    public NativeTextVerticalAlignment text_vertical_alignment;
+    public uint text_underline;
+    public fixed uint reserved[6];
 }
 
 internal static partial class NativeMethods

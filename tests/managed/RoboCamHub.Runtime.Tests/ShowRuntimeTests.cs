@@ -19,7 +19,10 @@ public sealed class ShowRuntimeTests
             [
                 new ShapeElementDefinition("background", 0, 0, 1, 1, -1, 0x102030FF),
                 new CameraElementDefinition("camera", "camera-1", 0, 0, 1, 1),
-                new TextElementDefinition("text", "Title", 0, 0, 1, 0.2, 1),
+                new TextElementDefinition(
+                    "text", "Title", 0, 0, 1, 0.2, 1,
+                    verticalAlignment: TextElementVerticalAlignment.Bottom,
+                    underline: true),
                 new ImageElementDefinition("image", asset.Id, 0.8, 0.8, 0.2, 0.2, 2),
                 new FrameElementDefinition("frame", 0, 0, 1, 1, 3, 0xFFFFFFFF),
             ],
@@ -28,6 +31,10 @@ public sealed class ShowRuntimeTests
         Assert.Equal(1U, view.GetStatus().BoundSourceCount);
         Assert.Contains("view:apply-scene:mixed:5", factory.Events);
         Assert.Equal(1U, runtime.GetDiagnostics().TotalBoundViewSourceCount);
+        var nativeText = Assert.Single(
+            factory.Engine!.LastAppliedScene!, element => element.Kind == NativeSceneElementKind.Text);
+        Assert.Equal(NativeTextVerticalAlignment.Bottom, nativeText.TextVerticalAlignment);
+        Assert.True(nativeText.TextUnderline);
     }
     [Fact]
     public void CameraRuntimeMapsDefinitionAndOperationsToNativeInteropBoundary()

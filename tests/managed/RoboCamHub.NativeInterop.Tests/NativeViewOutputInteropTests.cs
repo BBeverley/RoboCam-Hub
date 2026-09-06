@@ -148,7 +148,9 @@ public sealed class NativeViewOutputInteropTests
                     FontFamily: "Sans",
                     PrimaryRgba: 0xFFFFFFFF,
                     FontSize: 64,
-                    TextAlignment: NativeTextAlignment.Center),
+                    TextAlignment: NativeTextAlignment.Center,
+                    TextVerticalAlignment: NativeTextVerticalAlignment.Bottom,
+                    TextUnderline: true),
                 new(
                     NativeSceneElementKind.Frame,
                     "frame",

@@ -2,6 +2,7 @@ namespace RoboCamHub.NativeInterop;
 
 public enum NativeSceneElementKind : uint { Camera, Text, Image, Rectangle, Frame }
 public enum NativeTextAlignment : uint { Left, Center, Right }
+public enum NativeTextVerticalAlignment : uint { Top, Center, Bottom }
 public enum NativeTextWeight : uint { Normal, Bold }
 public enum NativeTextStyle : uint { Normal, Italic }
 
@@ -32,4 +33,6 @@ public sealed record NativeSceneElementConfig(
     double FontSize = 0,
     NativeTextAlignment TextAlignment = NativeTextAlignment.Left,
     NativeTextWeight TextWeight = NativeTextWeight.Normal,
-    NativeTextStyle TextStyle = NativeTextStyle.Normal);
+    NativeTextStyle TextStyle = NativeTextStyle.Normal,
+    NativeTextVerticalAlignment TextVerticalAlignment = NativeTextVerticalAlignment.Top,
+    bool TextUnderline = false);

@@ -874,7 +874,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
                 height ?? text.Height, zOrder ?? text.ZOrder, text.FontFamily, text.FontSize,
                 text.Alignment, text.Weight, text.Style, text.TextColorRgba, text.BackgroundColorRgba,
                 rotationDegrees ?? text.RotationDegrees, text.FlipHorizontal, text.FlipVertical,
-                text.Visible, text.Enabled),
+                text.Visible, text.Enabled, text.VerticalAlignment, text.Underline),
             ImageElementDefinition image => new ImageElementDefinition(
                 id ?? image.Id, image.AssetId, x ?? image.X, y ?? image.Y, width ?? image.Width,
                 height ?? image.Height, zOrder ?? image.ZOrder, image.FitMode, image.Opacity,

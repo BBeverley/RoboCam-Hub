@@ -1199,7 +1199,8 @@ bool IsValidSceneElement(const rch_view_scene_element_v1& element)
       || !IsBooleanValue(element.flip_vertical)
       || !IsBooleanValue(element.visible)
       || !IsBooleanValue(element.enabled)
-      || !IsBooleanValue(element.secondary_enabled)) {
+      || !IsBooleanValue(element.secondary_enabled)
+      || !IsBooleanValue(element.text_underline)) {
     return false;
   }
   if (!std::all_of(
@@ -1218,6 +1219,7 @@ bool IsValidSceneElement(const rch_view_scene_element_v1& element)
         && element.font_family_utf8 != nullptr && element.font_family_utf8[0] != '\0'
         && element.font_size >= 1.0 && element.font_size <= 512.0
         && element.text_alignment <= RCH_VIEW_TEXT_ALIGN_RIGHT
+        && element.text_vertical_alignment <= RCH_VIEW_TEXT_VERTICAL_ALIGN_BOTTOM
         && element.text_weight <= RCH_VIEW_TEXT_WEIGHT_BOLD
         && element.text_style <= RCH_VIEW_TEXT_STYLE_ITALIC;
     case RCH_VIEW_SCENE_ELEMENT_IMAGE:
@@ -1317,6 +1319,19 @@ rch_result PrepareTextResource(
   pango_layout_set_width(layout, static_cast<int>(width) * PANGO_SCALE);
   pango_layout_set_height(layout, static_cast<int>(height) * PANGO_SCALE);
   pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+  if (config.text_underline != 0U) {
+    auto* attributes = pango_attr_list_new();
+    if (attributes == nullptr) {
+      pango_font_description_free(font);
+      g_object_unref(layout);
+      cairo_destroy(context);
+      cairo_surface_destroy(surface);
+      return RCH_RESULT_OUT_OF_MEMORY;
+    }
+    pango_attr_list_insert(attributes, pango_attr_underline_new(PANGO_UNDERLINE_SINGLE));
+    pango_layout_set_attributes(layout, attributes);
+    pango_attr_list_unref(attributes);
+  }
   const auto alignment = config.text_alignment == RCH_VIEW_TEXT_ALIGN_CENTER
     ? PANGO_ALIGN_CENTER
     : (config.text_alignment == RCH_VIEW_TEXT_ALIGN_RIGHT ? PANGO_ALIGN_RIGHT : PANGO_ALIGN_LEFT);
@@ -1327,7 +1342,15 @@ rch_result PrepareTextResource(
   double a = 0.0;
   UnpackRgba(config.primary_rgba, config.opacity, r, g, b, a);
   cairo_set_source_rgba(context, r, g, b, a);
-  cairo_move_to(context, 0.0, 0.0);
+  PangoRectangle logical_bounds{};
+  pango_layout_get_pixel_extents(layout, nullptr, &logical_bounds);
+  double text_y = -static_cast<double>(logical_bounds.y);
+  if (config.text_vertical_alignment == RCH_VIEW_TEXT_VERTICAL_ALIGN_CENTER) {
+    text_y += (static_cast<double>(height) - static_cast<double>(logical_bounds.height)) * 0.5;
+  } else if (config.text_vertical_alignment == RCH_VIEW_TEXT_VERTICAL_ALIGN_BOTTOM) {
+    text_y += static_cast<double>(height) - static_cast<double>(logical_bounds.height);
+  }
+  cairo_move_to(context, 0.0, text_y);
   pango_cairo_show_layout(context, layout);
   cairo_surface_flush(surface);
 

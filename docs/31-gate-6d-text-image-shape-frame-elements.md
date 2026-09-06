@@ -4,9 +4,9 @@
 
 Gate 6D extends the ordered View scene with four non-camera element types:
 
-- UTF-8 text using system fonts, word/character wrapping, left/centre/right
-  alignment, normal/bold and normal/italic styling, RGBA text colour and an
-  optional RGBA background;
+- UTF-8 text using system fonts, word/character wrapping, left/centre/right and
+  top/centre/bottom alignment, independently toggled bold/italic/underline
+  styling, RGBA text colour and an optional RGBA background;
 - imported PNG/JPEG images with alpha, Stretch/Contain/Cover, opacity and flip;
 - filled rectangles with optional outline;
 - border-only rectangular frames.
@@ -27,7 +27,11 @@ and Frame. Image import uses the platform file picker. Only PNG/JPEG dimensions
 are read in managed code for schematic Contain geometry; managed code never
 decodes, owns or transports the full image pixels. Type-specific properties and
 the existing move/resize/rotate/nudge/duplicate/delete/reorder paths all submit
-one complete candidate scene.
+one complete candidate scene. Colour properties use an alpha-aware picker
+rather than requiring hexadecimal input. Text font selection is populated from
+the client operating system's font collection. Compact linked icon groups make
+horizontal and vertical alignment mutually exclusive within their respective
+sets; bold, italic and underline remain independent toggles.
 
 ## Asset identity
 
@@ -98,7 +102,8 @@ image rollback, scene ABI canaries and zero RTSP/decoder ownership for visuals.
 Managed tests cover stable mixed IDs, cross-type duplicate rejection, missing
 assets and invalid values, image Contain geometry from header metadata,
 topmost/frame-border hit testing, pending non-camera transforms, visual add and
-duplicate flows, property validation, View duplication with regenerated
+duplicate flows, colour/property validation, linked alignment and style toggle
+semantics, View duplication with regenerated
 element IDs and reused asset IDs, managed ABI marshaling and runtime ownership.
 All pre-Gate-6D tests remain in the normal Release and sanitizer suites.
 

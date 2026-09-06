@@ -109,6 +109,7 @@ public sealed class Gate6DVisualEditorTests
         {
             PrimaryColor = "#AABBCCDD",
             SecondaryColor = "#01020304",
+            SecondaryColorEnabled = true,
             StrokeWidth = 7,
         };
 
@@ -116,7 +117,49 @@ public sealed class Gate6DVisualEditorTests
         Assert.Equal(0xAABBCCDDU, updated.FillColorRgba);
         Assert.Equal(0x01020304U, updated.OutlineColorRgba);
         Assert.Equal(7, updated.OutlineWidth);
+        properties.SecondaryColorEnabled = false;
+        updated = Assert.IsType<ShapeElementDefinition>(properties.ToDefinition());
+        Assert.Null(updated.OutlineColorRgba);
         properties.PrimaryColor = "red";
         Assert.Throws<FormatException>(() => properties.ToDefinition());
+    }
+
+    [Fact]
+    public void TextPropertyIconsAreMutuallyExclusiveWithinAlignmentSetsAndToggleStyles()
+    {
+        var source = new TextElementDefinition("text", "Title", 0, 0, 1, 1, 0);
+        var properties = new VisualElementPropertiesViewModel(source);
+
+        properties.AlignCenter = true;
+        properties.AlignBottom = true;
+        properties.IsBold = true;
+        properties.IsItalic = true;
+        properties.IsUnderline = true;
+
+        Assert.False(properties.AlignLeft);
+        Assert.True(properties.AlignCenter);
+        Assert.False(properties.AlignRight);
+        Assert.False(properties.AlignTop);
+        Assert.False(properties.AlignMiddle);
+        Assert.True(properties.AlignBottom);
+        var updated = Assert.IsType<TextElementDefinition>(properties.ToDefinition());
+        Assert.Equal(TextElementAlignment.Center, updated.Alignment);
+        Assert.Equal(TextElementVerticalAlignment.Bottom, updated.VerticalAlignment);
+        Assert.Equal(TextElementWeight.Bold, updated.Weight);
+        Assert.Equal(TextElementStyle.Italic, updated.Style);
+        Assert.True(updated.Underline);
+
+        properties.AlignCenter = false;
+        properties.AlignBottom = false;
+        Assert.True(properties.AlignCenter);
+        Assert.True(properties.AlignBottom);
+
+        properties.IsBold = false;
+        properties.IsItalic = false;
+        properties.IsUnderline = false;
+        updated = Assert.IsType<TextElementDefinition>(properties.ToDefinition());
+        Assert.Equal(TextElementWeight.Normal, updated.Weight);
+        Assert.Equal(TextElementStyle.Normal, updated.Style);
+        Assert.False(updated.Underline);
     }
 }

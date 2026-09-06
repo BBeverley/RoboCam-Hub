@@ -161,7 +161,8 @@ public sealed class ViewTemplateFactory
                 NewId("text-element"), text.Text, text.X, text.Y, text.Width, text.Height,
                 text.ZOrder, text.FontFamily, text.FontSize, text.Alignment, text.Weight,
                 text.Style, text.TextColorRgba, text.BackgroundColorRgba, text.RotationDegrees,
-                text.FlipHorizontal, text.FlipVertical, text.Visible, text.Enabled),
+                text.FlipHorizontal, text.FlipVertical, text.Visible, text.Enabled,
+                text.VerticalAlignment, text.Underline),
             ImageElementDefinition image => new ImageElementDefinition(
                 NewId("image-element"), image.AssetId, image.X, image.Y, image.Width,
                 image.Height, image.ZOrder, image.FitMode, image.Opacity, image.RotationDegrees,

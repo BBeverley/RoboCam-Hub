@@ -160,7 +160,8 @@ or allocator ownership crosses the boundary.
 
 Gate 6D additively extends ABI 1.10 with `rch_view_scene_element_v1` and one
 complete mixed-scene apply call. Element kinds and style values are fixed-width
-C enums/scalars; UTF-8 text, font, camera/asset identity and runtime asset-source
+C enums/scalars; UTF-8 text, font, horizontal/vertical alignment, underline,
+camera/asset identity and runtime asset-source
 pointers are borrowed for the call. Every scene-array entry has one uniform
 caller-declared `struct_size`, used as the array stride so appended fields can
 be ignored safely. Native code prepares bounded text/image resources before the

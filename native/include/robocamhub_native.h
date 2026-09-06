@@ -133,6 +133,13 @@ enum rch_view_text_alignment_code {
   RCH_VIEW_TEXT_ALIGN_RIGHT = 2
 };
 
+typedef uint32_t rch_view_text_vertical_alignment;
+enum rch_view_text_vertical_alignment_code {
+  RCH_VIEW_TEXT_VERTICAL_ALIGN_TOP = 0,
+  RCH_VIEW_TEXT_VERTICAL_ALIGN_CENTER = 1,
+  RCH_VIEW_TEXT_VERTICAL_ALIGN_BOTTOM = 2
+};
+
 typedef uint32_t rch_view_text_weight;
 enum rch_view_text_weight_code {
   RCH_VIEW_TEXT_WEIGHT_NORMAL = 0,
@@ -212,7 +219,9 @@ typedef struct rch_view_scene_element_v1 {
   rch_view_text_alignment text_alignment;
   rch_view_text_weight text_weight;
   rch_view_text_style text_style;
-  uint32_t reserved[8];
+  rch_view_text_vertical_alignment text_vertical_alignment;
+  uint32_t text_underline;
+  uint32_t reserved[6];
 } rch_view_scene_element_v1;
 
 /* The UTF-8 strings are borrowed only for the duration of

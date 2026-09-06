@@ -149,7 +149,7 @@ int main()
   foreground.secondary_enabled = 1U;
   foreground.stroke_width = 8.0;
   std::array scene{background, foreground};
-  passed &= Expect(rch_view_apply_scene(view, scene.data(), scene.size()) == RCH_RESULT_OK, "shape scene applies");
+  passed &= Expect(rch_view_apply_scene(view, scene.data(), static_cast<std::uint32_t>(scene.size())) == RCH_RESULT_OK, "shape scene applies");
   WaitForRender(view);
   std::array<std::uint8_t, 4> color{};
   passed &= Expect(WaitAndSample(view, 960, 540, color) && color[0] > 240 && color[1] < 10, "rectangle fill renders");
@@ -160,7 +160,7 @@ int main()
   auto tie_b = Element("b", RCH_VIEW_SCENE_ELEMENT_RECTANGLE);
   tie_b.primary_rgba = UINT32_C(0x00FF00FF);
   std::array tie_scene{tie_b, tie_a};
-  passed &= Expect(rch_view_apply_scene(view, tie_scene.data(), tie_scene.size()) == RCH_RESULT_OK, "tie scene applies");
+  passed &= Expect(rch_view_apply_scene(view, tie_scene.data(), static_cast<std::uint32_t>(tie_scene.size())) == RCH_RESULT_OK, "tie scene applies");
   WaitForRender(view);
   passed &= Expect(WaitAndSample(view, 960, 540, color) && color[1] > 240, "element ID deterministically breaks equal-Z ties");
 
@@ -179,13 +179,13 @@ int main()
   frame.primary_rgba = UINT32_C(0xFFFFFFFF);
   frame.stroke_width = 12.0;
   std::array frame_scene{background, frame};
-  passed &= Expect(rch_view_apply_scene(view, frame_scene.data(), frame_scene.size()) == RCH_RESULT_OK, "frame scene applies");
+  passed &= Expect(rch_view_apply_scene(view, frame_scene.data(), static_cast<std::uint32_t>(frame_scene.size())) == RCH_RESULT_OK, "frame scene applies");
   WaitForRender(view);
   passed &= Expect(WaitAndSample(view, 960, 540, color) && color[2] > 240 && color[0] < 10, "frame centre stays transparent");
   passed &= Expect(WaitAndSample(view, 193, 109, color) && color[0] > 240, "frame border renders");
   frame.visible = 0U;
   frame_scene[1] = frame;
-  passed &= Expect(rch_view_apply_scene(view, frame_scene.data(), frame_scene.size()) == RCH_RESULT_OK, "hidden frame applies");
+  passed &= Expect(rch_view_apply_scene(view, frame_scene.data(), static_cast<std::uint32_t>(frame_scene.size())) == RCH_RESULT_OK, "hidden frame applies");
   WaitForRender(view);
   passed &= Expect(
     WaitAndSample(view, 193, 109, color) && color[0] < 10U && color[2] > 240U,
@@ -215,6 +215,34 @@ int main()
     }
   }
   passed &= Expect(found_text_pixel, "text produces visible native pixels");
+  passed &= Expect(found_text_pixel && text_pixel_y < 250U, "top-aligned text occupies the top of its destination");
+
+  text.text_vertical_alignment = RCH_VIEW_TEXT_VERTICAL_ALIGN_BOTTOM;
+  text.text_underline = 1U;
+  passed &= Expect(
+    rch_view_apply_scene(view, &text, 1) == RCH_RESULT_OK,
+    "bottom-aligned underlined text applies");
+  WaitForRender(view);
+  bool found_bottom_text_pixel = false;
+  for (std::uint32_t y = 250; y < 430 && !found_bottom_text_pixel; y += 8) {
+    for (std::uint32_t x = 200; x < 1720; x += 8) {
+      if (WaitAndSample(view, x, y, color) && color[0] > 32U) {
+        found_bottom_text_pixel = true;
+        break;
+      }
+    }
+  }
+  passed &= Expect(found_bottom_text_pixel, "vertical alignment moves text to the bottom of its destination");
+  auto invalid_text_style = text;
+  invalid_text_style.text_underline = 2U;
+  passed &= Expect(
+    rch_view_apply_scene(view, &invalid_text_style, 1) == RCH_RESULT_INVALID_ARGUMENT,
+    "underline field rejects non-boolean ABI values");
+
+  text.text_vertical_alignment = RCH_VIEW_TEXT_VERTICAL_ALIGN_TOP;
+  text.text_underline = 0U;
+  passed &= Expect(rch_view_apply_scene(view, &text, 1) == RCH_RESULT_OK, "top text scene restores");
+  WaitForRender(view);
   text.visible = 0U;
   passed &= Expect(rch_view_apply_scene(view, &text, 1) == RCH_RESULT_OK, "hidden text applies");
   WaitForRender(view);
@@ -239,7 +267,7 @@ int main()
   std::array image_scene{background, image};
   image.fit_mode = RCH_VIEW_CAMERA_FIT_CONTAIN;
   image_scene[1] = image;
-  passed &= Expect(rch_view_apply_scene(view, image_scene.data(), image_scene.size()) == RCH_RESULT_OK, "PNG image applies");
+  passed &= Expect(rch_view_apply_scene(view, image_scene.data(), static_cast<std::uint32_t>(image_scene.size())) == RCH_RESULT_OK, "PNG image applies");
   WaitForRender(view);
   (void)WaitAndSample(view, 960, 540, color);
   if (!(color[0] > 100 && color[2] > 100)) {
@@ -251,12 +279,12 @@ int main()
   passed &= Expect(WaitAndSample(view, 10, 540, color) && color[0] < 10 && color[2] > 240, "image Contain preserves transparent letterbox");
   image.fit_mode = RCH_VIEW_CAMERA_FIT_COVER;
   image_scene[1] = image;
-  passed &= Expect(rch_view_apply_scene(view, image_scene.data(), image_scene.size()) == RCH_RESULT_OK, "image Cover applies");
+  passed &= Expect(rch_view_apply_scene(view, image_scene.data(), static_cast<std::uint32_t>(image_scene.size())) == RCH_RESULT_OK, "image Cover applies");
   WaitForRender(view);
   passed &= Expect(WaitAndSample(view, 10, 540, color) && color[0] > 100 && color[2] > 100, "image Cover fills destination");
   image.visible = 0U;
   image_scene[1] = image;
-  passed &= Expect(rch_view_apply_scene(view, image_scene.data(), image_scene.size()) == RCH_RESULT_OK, "hidden image applies");
+  passed &= Expect(rch_view_apply_scene(view, image_scene.data(), static_cast<std::uint32_t>(image_scene.size())) == RCH_RESULT_OK, "hidden image applies");
   WaitForRender(view);
   passed &= Expect(
     WaitAndSample(view, 960, 540, color) && color[0] < 10U && color[2] > 240U,
@@ -268,7 +296,7 @@ int main()
   image.width = 0.4;
   image.height = 0.1;
   image_scene[1] = image;
-  passed &= Expect(rch_view_apply_scene(view, image_scene.data(), image_scene.size()) == RCH_RESULT_OK, "rotated image applies");
+  passed &= Expect(rch_view_apply_scene(view, image_scene.data(), static_cast<std::uint32_t>(image_scene.size())) == RCH_RESULT_OK, "rotated image applies");
   WaitForRender(view);
   passed &= Expect(
     WaitAndSample(view, 960, 700, color) && color[0] > 100U && color[2] > 100U,
@@ -305,7 +333,7 @@ int main()
   invalid_text.font_size = 0.0;
   std::array malformed_scene{background, invalid_text};
   passed &= Expect(
-    rch_view_apply_scene(view, malformed_scene.data(), malformed_scene.size()) == RCH_RESULT_INVALID_ARGUMENT,
+    rch_view_apply_scene(view, malformed_scene.data(), static_cast<std::uint32_t>(malformed_scene.size())) == RCH_RESULT_INVALID_ARGUMENT,
     "malformed text rejects complete scene");
   WaitForRender(view);
   passed &= Expect(
@@ -325,7 +353,7 @@ int main()
   text.z_order = 1;
   std::array camera_text_scene{camera, text};
   passed &= Expect(
-    rch_view_apply_scene(view, camera_text_scene.data(), camera_text_scene.size()) == RCH_RESULT_OK,
+    rch_view_apply_scene(view, camera_text_scene.data(), static_cast<std::uint32_t>(camera_text_scene.size())) == RCH_RESULT_OK,
     "text and camera share one ordered scene");
   WaitForRender(view);
   passed &= Expect(
@@ -333,7 +361,7 @@ int main()
     "text renders above a camera element by Z-order");
   passed &= Expect(rch_view_apply_scene(view, &camera, 1) == RCH_RESULT_OK, "camera scene restored for rollback check");
   std::array invalid_mixed{camera, missing};
-  passed &= Expect(rch_view_apply_scene(view, invalid_mixed.data(), invalid_mixed.size()) == RCH_RESULT_NOT_CONFIGURED,
+  passed &= Expect(rch_view_apply_scene(view, invalid_mixed.data(), static_cast<std::uint32_t>(invalid_mixed.size())) == RCH_RESULT_NOT_CONFIGURED,
                    "camera plus missing image fails atomically");
   rch_view_status_v1 view_status{};
   view_status.struct_size = sizeof(view_status);
@@ -355,7 +383,7 @@ int main()
   extended[0].element.struct_size = sizeof(ExtendedSceneElement);
   extended[1].element.struct_size = sizeof(ExtendedSceneElement);
   passed &= Expect(
-    rch_view_apply_scene(view, &extended[0].element, extended.size()) == RCH_RESULT_OK,
+    rch_view_apply_scene(view, &extended[0].element, static_cast<std::uint32_t>(extended.size())) == RCH_RESULT_OK,
     "larger caller-sized scene element array applies with caller stride");
   passed &= Expect(
     extended[0].future[0] == UINT64_C(0x1122334455667788)

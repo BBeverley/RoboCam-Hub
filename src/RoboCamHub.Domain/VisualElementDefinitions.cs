@@ -7,6 +7,13 @@ public enum TextElementAlignment
     Right = 2,
 }
 
+public enum TextElementVerticalAlignment
+{
+    Top = 0,
+    Center = 1,
+    Bottom = 2,
+}
+
 public enum TextElementWeight
 {
     Normal = 0,
@@ -40,7 +47,9 @@ public sealed class TextElementDefinition : ViewSceneElementDefinition
         bool flipHorizontal = false,
         bool flipVertical = false,
         bool visible = true,
-        bool enabled = true)
+        bool enabled = true,
+        TextElementVerticalAlignment verticalAlignment = TextElementVerticalAlignment.Top,
+        bool underline = false)
         : base(id, x, y, width, height, zOrder, rotationDegrees, flipHorizontal, flipVertical, visible, enabled)
     {
         Text = DefinitionValidation.Required(text, nameof(text), "Text content");
@@ -49,14 +58,17 @@ public sealed class TextElementDefinition : ViewSceneElementDefinition
         {
             throw new ArgumentOutOfRangeException(nameof(fontSize));
         }
-        if (!Enum.IsDefined(alignment) || !Enum.IsDefined(weight) || !Enum.IsDefined(style))
+        if (!Enum.IsDefined(alignment) || !Enum.IsDefined(verticalAlignment)
+            || !Enum.IsDefined(weight) || !Enum.IsDefined(style))
         {
             throw new ArgumentOutOfRangeException(nameof(alignment));
         }
         FontSize = fontSize;
         Alignment = alignment;
+        VerticalAlignment = verticalAlignment;
         Weight = weight;
         Style = style;
+        Underline = underline;
         TextColorRgba = textColorRgba;
         BackgroundColorRgba = backgroundColorRgba;
     }
@@ -65,8 +77,10 @@ public sealed class TextElementDefinition : ViewSceneElementDefinition
     public string FontFamily { get; }
     public double FontSize { get; }
     public TextElementAlignment Alignment { get; }
+    public TextElementVerticalAlignment VerticalAlignment { get; }
     public TextElementWeight Weight { get; }
     public TextElementStyle Style { get; }
+    public bool Underline { get; }
     public uint TextColorRgba { get; }
     public uint? BackgroundColorRgba { get; }
 }

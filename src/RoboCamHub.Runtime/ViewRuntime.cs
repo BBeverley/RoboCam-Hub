@@ -231,6 +231,8 @@ public sealed class ViewRuntime : IDisposable
             TextAlignment = (NativeTextAlignment)element.Alignment,
             TextWeight = (NativeTextWeight)element.Weight,
             TextStyle = (NativeTextStyle)element.Style,
+            TextVerticalAlignment = (NativeTextVerticalAlignment)element.VerticalAlignment,
+            TextUnderline = element.Underline,
         };
 
     private static NativeSceneElementConfig Image(

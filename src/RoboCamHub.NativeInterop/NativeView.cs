@@ -155,6 +155,8 @@ public sealed class NativeView : IDisposable
                     text_alignment = element.TextAlignment,
                     text_weight = element.TextWeight,
                     text_style = element.TextStyle,
+                    text_vertical_alignment = element.TextVerticalAlignment,
+                    text_underline = element.TextUnderline ? 1U : 0U,
                 };
             }
             fixed (NativeSceneElementConfigV1* pointer = nativeElements)

@@ -258,7 +258,10 @@ public sealed class ViewTemplateFactoryTests
             "source",
             "Source",
             [
-                new TextElementDefinition("text", "Title", 0, 0, 1, 0.1, 1),
+                new TextElementDefinition(
+                    "text", "Title", 0, 0, 1, 0.1, 1,
+                    verticalAlignment: TextElementVerticalAlignment.Bottom,
+                    underline: true),
                 new ImageElementDefinition("image", asset.Id, 0, 0.1, 0.2, 0.2, 2),
                 new ShapeElementDefinition("shape", 0, 0.3, 1, 0.1, 3, 0x12345678),
                 new FrameElementDefinition("frame", 0, 0, 1, 1, 4, 0xFFFFFFFF),
@@ -269,7 +272,12 @@ public sealed class ViewTemplateFactoryTests
 
         Assert.Collection(
             duplicate.SceneElements,
-            element => Assert.IsType<TextElementDefinition>(element),
+            element =>
+            {
+                var text = Assert.IsType<TextElementDefinition>(element);
+                Assert.Equal(TextElementVerticalAlignment.Bottom, text.VerticalAlignment);
+                Assert.True(text.Underline);
+            },
             element => Assert.Equal(asset.Id, Assert.IsType<ImageElementDefinition>(element).AssetId),
             element => Assert.IsType<ShapeElementDefinition>(element),
             element => Assert.IsType<FrameElementDefinition>(element));

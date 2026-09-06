@@ -404,7 +404,10 @@ int main()
                  "invalid scene apply must retain the previous rendered scene")
       || !Expect(ViewStatus(view).bound_source_count == 1U,
                  "invalid scene apply must retain previous bindings atomically")
-      || !Expect(rch_view_apply_camera_scene(view, duplicates.data(), duplicates.size())
+      || !Expect(rch_view_apply_camera_scene(
+                   view,
+                   duplicates.data(),
+                   static_cast<std::uint32_t>(duplicates.size()))
                    == RCH_RESULT_INVALID_ARGUMENT,
                  "duplicate element IDs must be rejected")
       || !Expect(rch_view_apply_camera_scene(view, &overcrop, 1U) == RCH_RESULT_INVALID_ARGUMENT,
@@ -596,7 +599,11 @@ int main()
     MakeElement("a-red", "scene-red", 0.0, 0.0, 1.0, 1.0, 5),
     MakeElement("z-green", "scene-green", 0.25, 0.25, 0.5, 0.5, 5),
   };
-  if (!Expect(ApplyAndWait(view, layers.data(), layers.size()), "overlap scene must apply")) {
+  if (!Expect(ApplyAndWait(
+                view,
+                layers.data(),
+                static_cast<std::uint32_t>(layers.size())),
+              "overlap scene must apply")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;
@@ -610,7 +617,11 @@ int main()
   }
 
   std::swap(layers[0], layers[1]);
-  if (!Expect(ApplyAndWait(view, layers.data(), layers.size()), "reordered equal-z scene must apply")) {
+  if (!Expect(ApplyAndWait(
+                view,
+                layers.data(),
+                static_cast<std::uint32_t>(layers.size())),
+              "reordered equal-z scene must apply")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;
@@ -628,7 +639,11 @@ int main()
       layer.visible = 0U;
     }
   }
-  if (!Expect(ApplyAndWait(view, layers.data(), layers.size()), "hidden layer scene must apply")) {
+  if (!Expect(ApplyAndWait(
+                view,
+                layers.data(),
+                static_cast<std::uint32_t>(layers.size())),
+              "hidden layer scene must apply")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;
@@ -645,7 +660,11 @@ int main()
       layer.enabled = 0U;
     }
   }
-  if (!Expect(ApplyAndWait(view, layers.data(), layers.size()), "disabled layer scene must apply")) {
+  if (!Expect(ApplyAndWait(
+                view,
+                layers.data(),
+                static_cast<std::uint32_t>(layers.size())),
+              "disabled layer scene must apply")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);
     return 1;
@@ -661,7 +680,10 @@ int main()
     MakeElement("reuse-left", "scene-red", 0.0, 0.0, 0.5, 1.0),
     MakeElement("reuse-right", "scene-red", 0.5, 0.0, 0.5, 1.0),
   };
-  if (!Expect(ApplyAndWait(view, reused.data(), reused.size()),
+  if (!Expect(ApplyAndWait(
+                view,
+                reused.data(),
+                static_cast<std::uint32_t>(reused.size())),
               "one camera reused in two elements must apply")) {
     rch_view_destroy(view);
     rch_engine_destroy(engine);

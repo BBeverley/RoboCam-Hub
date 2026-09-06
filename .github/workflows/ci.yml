@@ -130,3 +130,45 @@ jobs:
 
       - name: Run managed persistence tests
         run: dotnet test tests/managed/RoboCamHub.Persistence.Tests/RoboCamHub.Persistence.Tests.csproj --configuration Release --no-build --no-restore
+
+      - name: Package macOS Developer Preview
+        if: runner.os == 'macOS'
+        shell: bash
+        run: ./scripts/package-macos.sh "$GITHUB_WORKSPACE/dist/macos"
+
+      - name: Archive macOS Developer Preview
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          archive="$GITHUB_WORKSPACE/RoboCam-Hub-macos-$GITHUB_SHA.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$GITHUB_WORKSPACE/dist/macos/RoboCam-Hub.app" "$archive"
+          du -h "$archive"
+
+      - name: Upload macOS Developer Preview
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v6
+        with:
+          name: RoboCam-Hub-macos-${{ github.sha }}
+          path: RoboCam-Hub-macos-${{ github.sha }}.zip
+          if-no-files-found: error
+
+      - name: Package Windows x64 Developer Preview
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -OutputRoot "$env:GITHUB_WORKSPACE\dist\windows-x64"
+
+      - name: Archive Windows x64 Developer Preview
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:GITHUB_WORKSPACE "RoboCam-Hub-windows-x64-$env:GITHUB_SHA.zip"
+          Compress-Archive -Path "$env:GITHUB_WORKSPACE\dist\windows-x64\*" -DestinationPath $archive
+          Get-Item $archive | Select-Object Name, Length
+
+      - name: Upload Windows x64 Developer Preview
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v6
+        with:
+          name: RoboCam-Hub-windows-x64-${{ github.sha }}
+          path: RoboCam-Hub-windows-x64-${{ github.sha }}.zip
+          if-no-files-found: error

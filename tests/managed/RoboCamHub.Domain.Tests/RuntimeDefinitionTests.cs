@@ -70,4 +70,25 @@ public sealed class RuntimeDefinitionTests
         Assert.IsAssignableFrom<IReadOnlyList<string?>>(view.CameraIdsBySlot);
         Assert.False(view.CameraIdsBySlot is string?[]);
     }
+
+    [Fact]
+    public void MultipleViewsAndOutputsRetainIndependentStableIdsAndReferences()
+    {
+        var views = new[]
+        {
+            new ViewDefinition("view-a", "Spots A", "camera-1"),
+            new ViewDefinition("view-b", "Spots B", "camera-1"),
+        };
+        var outputs = new[]
+        {
+            new OutputDefinition("output-a", "Output A", "ROBOCAM - A", views[0].Id),
+            new OutputDefinition("output-b", "Output B", "ROBOCAM - B", views[1].Id),
+            new OutputDefinition("output-a-backup", "Output A Backup", "ROBOCAM - A BACKUP", views[0].Id),
+        };
+
+        Assert.Equal(new[] { "view-a", "view-b" }, views.Select(view => view.Id));
+        Assert.Equal(new[] { "output-a", "output-b", "output-a-backup" }, outputs.Select(output => output.Id));
+        Assert.Equal(new[] { "view-a", "view-b", "view-a" }, outputs.Select(output => output.ViewId));
+        Assert.All(views, view => Assert.Equal("camera-1", view.GetCameraId(0)));
+    }
 }

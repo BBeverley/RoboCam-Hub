@@ -97,6 +97,11 @@ Reconnect is not shown because Gate 5A has no distinct managed reconnect operati
 
 ## Current limitations
 
+> Historical Gate 5B boundary: Gate 5C replaced the preview placeholder and Gate
+> 5D replaced the fixed View/single Output workspace with collection-based View
+> and Output controls. See `docs/26-gate-5c-native-view-preview.md` and
+> `docs/27-gate-5d-multiple-views-outputs.md`.
+
 Gate 5B deliberately does not provide:
 
 - native or managed video preview; the central surface is an explicit Gate 5C placeholder;

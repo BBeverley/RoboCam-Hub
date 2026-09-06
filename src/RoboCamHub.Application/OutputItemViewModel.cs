@@ -13,6 +13,10 @@ public sealed class OutputItemViewModel : ObservableObject, IDisposable
     private bool _receiverCountKnown;
     private uint _receiverCount;
     private uint _sendFpsMilli;
+    private ulong _latestSentFrameAgeMs = ulong.MaxValue;
+    private ulong _droppedOrSkippedFrameCount;
+    private uint _averageSendDurationUs;
+    private uint _p95SendDurationUs;
 
     public OutputItemViewModel(
         OutputDefinition definition,
@@ -26,6 +30,7 @@ public sealed class OutputItemViewModel : ObservableObject, IDisposable
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         StartCommand = new AsyncCommand(StartAsync, () => CanStart);
         StopCommand = new AsyncCommand(StopAsync, () => CanStop);
+        RestartCommand = new AsyncCommand(RestartAsync, () => CanRestart);
     }
 
     public OutputDefinition Definition { get; }
@@ -124,6 +129,62 @@ public sealed class OutputItemViewModel : ObservableObject, IDisposable
 
     public string SendFpsText => $"Send: {SendFpsMilli / 1000.0:F1} fps";
 
+    public ulong LatestSentFrameAgeMs
+    {
+        get => _latestSentFrameAgeMs;
+        private set
+        {
+            if (SetProperty(ref _latestSentFrameAgeMs, value))
+            {
+                RaisePropertyChanged(nameof(FrameAgeText));
+            }
+        }
+    }
+
+    public string FrameAgeText => LatestSentFrameAgeMs == ulong.MaxValue
+        ? "Age —"
+        : $"Age {LatestSentFrameAgeMs} ms";
+
+    public ulong DroppedOrSkippedFrameCount
+    {
+        get => _droppedOrSkippedFrameCount;
+        private set
+        {
+            if (SetProperty(ref _droppedOrSkippedFrameCount, value))
+            {
+                RaisePropertyChanged(nameof(DroppedFramesText));
+            }
+        }
+    }
+
+    public string DroppedFramesText => $"Skipped {DroppedOrSkippedFrameCount}";
+
+    public uint AverageSendDurationUs
+    {
+        get => _averageSendDurationUs;
+        private set
+        {
+            if (SetProperty(ref _averageSendDurationUs, value))
+            {
+                RaisePropertyChanged(nameof(SendDurationText));
+            }
+        }
+    }
+
+    public uint P95SendDurationUs
+    {
+        get => _p95SendDurationUs;
+        private set
+        {
+            if (SetProperty(ref _p95SendDurationUs, value))
+            {
+                RaisePropertyChanged(nameof(SendDurationText));
+            }
+        }
+    }
+
+    public string SendDurationText => $"Send avg/p95 {AverageSendDurationUs}/{P95SendDurationUs} µs";
+
     public string? OperatorMessage
     {
         get => _operatorMessage;
@@ -147,9 +208,16 @@ public sealed class OutputItemViewModel : ObservableObject, IDisposable
         && !IsBusy
         && State is not OutputRuntimeState.Stopped;
 
+    public bool CanRestart => _runtime is not null
+        && Definition.Enabled
+        && !IsBusy
+        && State is not OutputRuntimeState.Starting;
+
     public AsyncCommand StartCommand { get; }
 
     public AsyncCommand StopCommand { get; }
+
+    public AsyncCommand RestartCommand { get; }
 
     internal void ApplyStatus(RuntimeObservation<OutputRuntimeStatus> observation)
     {
@@ -164,6 +232,10 @@ public sealed class OutputItemViewModel : ObservableObject, IDisposable
         ReceiverCountKnown = status.ReceiverCountKnown;
         ReceiverCount = status.ReceiverCount;
         SendFpsMilli = status.SendFpsMilli;
+        LatestSentFrameAgeMs = status.LatestSentFrameAgeMs;
+        DroppedOrSkippedFrameCount = status.DroppedOrSkippedFrameCount;
+        AverageSendDurationUs = status.AverageSendDurationUs;
+        P95SendDurationUs = status.P95SendDurationUs;
         OperatorMessage = null;
     }
 
@@ -184,6 +256,12 @@ public sealed class OutputItemViewModel : ObservableObject, IDisposable
             "stop",
             runtime => runtime.StopOutputAsync(Definition.Id),
             OutputRuntimeState.Stopped).ConfigureAwait(true);
+
+    private async Task RestartAsync()
+        => await RunActionAsync(
+            "restart",
+            runtime => runtime.RestartOutputAsync(Definition.Id),
+            OutputRuntimeState.Starting).ConfigureAwait(true);
 
     private async Task RunActionAsync(
         string action,
@@ -221,7 +299,9 @@ public sealed class OutputItemViewModel : ObservableObject, IDisposable
     {
         RaisePropertyChanged(nameof(CanStart));
         RaisePropertyChanged(nameof(CanStop));
+        RaisePropertyChanged(nameof(CanRestart));
         StartCommand.RaiseCanExecuteChanged();
         StopCommand.RaiseCanExecuteChanged();
+        RestartCommand.RaiseCanExecuteChanged();
     }
 }

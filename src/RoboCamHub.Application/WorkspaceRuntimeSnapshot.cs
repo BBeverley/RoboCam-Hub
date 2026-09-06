@@ -14,7 +14,7 @@ public readonly record struct RuntimeObservation<T>(T? Value, string? ErrorMessa
 
 public sealed record WorkspaceRuntimeSnapshot(
     IReadOnlyDictionary<string, RuntimeObservation<CameraRuntimeStatus>> Cameras,
-    RuntimeObservation<ViewRuntimeStatus> View,
-    IReadOnlyDictionary<uint, RuntimeObservation<ViewSourceRuntimeStatus>> ViewSources,
+    IReadOnlyDictionary<string, RuntimeObservation<ViewRuntimeStatus>> Views,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<uint, RuntimeObservation<ViewSourceRuntimeStatus>>> ViewSources,
     IReadOnlyDictionary<string, RuntimeObservation<OutputRuntimeStatus>> Outputs,
     RuntimeObservation<ViewPreviewRuntimeStatus>? Preview);

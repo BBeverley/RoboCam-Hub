@@ -84,6 +84,28 @@ The 600-second exercise completed normally. A single-source outage produced thre
 
 This proof used four independent local RTSP/H.264 sources rather than four physical cameras, and receiver traffic was loopback. Official-SDK runtime validation on Windows and Apple Silicon, remote-network behavior, and grandMA3 interoperability remain unverified. The formal four-hour profiling soak is still deferred. RSS rose during the 10-minute run and was nearly flat in its final minute, but that observation does not prove leak freedom.
 
+## Gate 5D collection and isolation status
+
+Gate 5D implements Outputs as a stable-ID collection. Each Output permanently
+references its selected View by stable `ViewId`, owns its own native sender
+handle and lifecycle gate, and exposes actual state independently from its
+desired configuration. A slow or stopping Output cannot serialize an unrelated
+Output operation at the managed application boundary, and native sender workers
+continue to consume only the newest composed sequence.
+
+The workspace rejects duplicate NDI source names case-insensitively before
+native sender creation. Local preview selection and Output routing use separate
+pending selections, and status polling updates observations without replacing
+either pending operator choice. Preview switch failure keeps the previous local
+selection when it can be restored and never stops active Outputs.
+
+The local official-SDK validation discovered two different active sources and a
+third same-View backup source. Stop/restart isolation, receiver reconnect,
+preview switching and same-View fan-out all completed without rebuilding
+camera/View ownership. Aggregate RTSP/decoder ownership stayed at 4/4. Detailed
+performance and acceptance evidence is recorded in
+`docs/27-gate-5d-multiple-views-outputs.md`.
+
 ## Naming
 
 Each Output has two related names.

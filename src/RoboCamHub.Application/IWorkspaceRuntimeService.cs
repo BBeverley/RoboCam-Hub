@@ -7,9 +7,11 @@ public interface IWorkspaceRuntimeService : IAsyncDisposable
 {
     IReadOnlyList<CameraDefinition> CameraDefinitions { get; }
 
-    ViewDefinition ViewDefinition { get; }
+    IReadOnlyList<ViewDefinition> ViewDefinitions { get; }
 
-    OutputDefinition? OutputDefinition { get; }
+    IReadOnlyList<OutputDefinition> OutputDefinitions { get; }
+
+    string SelectedViewId { get; }
 
     Task AddCameraAsync(CameraDefinition definition, CancellationToken cancellationToken = default);
 
@@ -17,9 +19,18 @@ public interface IWorkspaceRuntimeService : IAsyncDisposable
 
     Task StopCameraAsync(string cameraId, CancellationToken cancellationToken = default);
 
-    Task BindCameraSourceAsync(uint slotIndex, string cameraId, CancellationToken cancellationToken = default);
+    Task AddViewAsync(ViewDefinition definition, CancellationToken cancellationToken = default);
 
-    Task UnbindSourceAsync(uint slotIndex, CancellationToken cancellationToken = default);
+    Task BindCameraSourceAsync(
+        string viewId,
+        uint slotIndex,
+        string cameraId,
+        CancellationToken cancellationToken = default);
+
+    Task UnbindSourceAsync(
+        string viewId,
+        uint slotIndex,
+        CancellationToken cancellationToken = default);
 
     Task AddOutputAsync(OutputDefinition definition, CancellationToken cancellationToken = default);
 
@@ -27,7 +38,11 @@ public interface IWorkspaceRuntimeService : IAsyncDisposable
 
     Task StopOutputAsync(string outputId, CancellationToken cancellationToken = default);
 
-    void AttachPreview(PreviewHostSurface host);
+    Task RestartOutputAsync(string outputId, CancellationToken cancellationToken = default);
+
+    void AttachPreview(string viewId, PreviewHostSurface host);
+
+    void SwitchPreviewView(string viewId);
 
     void DetachPreview();
 

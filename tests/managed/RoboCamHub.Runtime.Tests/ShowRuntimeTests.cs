@@ -99,6 +99,126 @@ public sealed class ShowRuntimeTests
     }
 
     [Fact]
+    public void MultipleViewsAndOutputsPreserveStableFanOutOwnership()
+    {
+        var factory = new RecordingNativeRuntimeFactory();
+        using var show = ShowRuntime.Create(factory);
+        var camera = show.AddCamera(Camera("shared-camera"));
+        camera.Start();
+        var viewA = show.AddView(new ViewDefinition(
+            "view-a",
+            "Spots A",
+            "shared-camera",
+            "shared-camera",
+            "shared-camera",
+            "shared-camera"));
+        var viewB = show.AddView(new ViewDefinition(
+            "view-b",
+            "Spots B",
+            "shared-camera",
+            "shared-camera",
+            "shared-camera",
+            "shared-camera"));
+        var outputA = show.AddOutput(new OutputDefinition(
+            "output-a",
+            "Output A",
+            "ROBOCAM - A",
+            viewA.Definition.Id));
+        var outputB = show.AddOutput(new OutputDefinition(
+            "output-b",
+            "Output B",
+            "ROBOCAM - B",
+            viewB.Definition.Id));
+        var outputA2 = show.AddOutput(new OutputDefinition(
+            "output-a-backup",
+            "Output A Backup",
+            "ROBOCAM - A BACKUP",
+            viewA.Definition.Id));
+
+        outputA.Start();
+        outputB.Start();
+        outputA2.Start();
+        var diagnostics = show.GetDiagnostics();
+
+        Assert.Equal(2, show.Views.Count);
+        Assert.Equal(3, show.Outputs.Count);
+        Assert.Equal((uint)1, diagnostics.ConfiguredCameraCount);
+        Assert.Equal((uint)1, diagnostics.ActiveRtspSessionTotal);
+        Assert.Equal((uint)1, diagnostics.ActiveDecoderTotal);
+        Assert.Equal((uint)2, diagnostics.ViewCount);
+        Assert.Equal((uint)8, diagnostics.TotalBoundViewSourceCount);
+        Assert.Equal((uint)2, viewA.GetStatus().OutputConsumerCount);
+        Assert.Equal((uint)1, viewB.GetStatus().OutputConsumerCount);
+
+        outputA.Stop();
+        outputA.Dispose();
+
+        Assert.Equal(OutputRuntimeState.Running, outputB.GetStatus().State);
+        Assert.Equal(OutputRuntimeState.Running, outputA2.GetStatus().State);
+        Assert.False(viewA.IsDisposed);
+        Assert.Equal((uint)1, viewA.GetStatus().OutputConsumerCount);
+        Assert.Equal((uint)1, show.GetDiagnostics().ActiveRtspSessionTotal);
+        Assert.Equal((uint)1, show.GetDiagnostics().ActiveDecoderTotal);
+    }
+
+    [Fact]
+    public void DestroyingOneViewDisposesOnlyItsDependentOutputs()
+    {
+        var factory = new RecordingNativeRuntimeFactory();
+        using var show = ShowRuntime.Create(factory);
+        var viewA = show.AddView(new ViewDefinition("view-a", "Spots A"));
+        var viewB = show.AddView(new ViewDefinition("view-b", "Spots B"));
+        var outputA = show.AddOutput(new OutputDefinition(
+            "output-a",
+            "Output A",
+            "ROBOCAM - A",
+            viewA.Definition.Id));
+        var outputB = show.AddOutput(new OutputDefinition(
+            "output-b",
+            "Output B",
+            "ROBOCAM - B",
+            viewB.Definition.Id));
+        outputA.Start();
+        outputB.Start();
+
+        viewA.Dispose();
+
+        Assert.True(viewA.IsDisposed);
+        Assert.True(outputA.IsDisposed);
+        Assert.False(viewB.IsDisposed);
+        Assert.False(outputB.IsDisposed);
+        Assert.Equal(OutputRuntimeState.Running, outputB.GetStatus().State);
+        Assert.Single(show.Views);
+        Assert.Single(show.Outputs);
+        Assert.Same(viewB, show.GetView("view-b"));
+        Assert.Same(outputB, show.GetOutput("output-b"));
+    }
+
+    [Fact]
+    public void DuplicateNdiSourceNamesAreRejectedBeforeNativeSenderCreation()
+    {
+        var factory = new RecordingNativeRuntimeFactory();
+        using var show = ShowRuntime.Create(factory);
+        var view = show.AddView(new ViewDefinition("view-main", "Main"));
+        show.AddOutput(new OutputDefinition(
+            "output-a",
+            "Output A",
+            "ROBOCAM - MAIN",
+            view.Definition.Id));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => show.AddOutput(
+            new OutputDefinition(
+                "output-b",
+                "Output B",
+                "robocam - main",
+                view.Definition.Id)));
+
+        Assert.Contains("already exists", exception.Message, StringComparison.Ordinal);
+        Assert.Single(show.Outputs);
+        Assert.Equal(1, factory.Events.Count(item => item.StartsWith("sender:create", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void PreviewRuntimeAttachesToExistingViewWithoutChangingMediaOwnership()
     {
         var factory = new RecordingNativeRuntimeFactory();

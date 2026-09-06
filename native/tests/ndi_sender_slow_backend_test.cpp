@@ -41,6 +41,7 @@ int main()
   rch_engine_handle engine = nullptr;
   rch_view_handle view = nullptr;
   rch_ndi_sender_handle sender = nullptr;
+  rch_ndi_sender_handle independent_sender = nullptr;
   if (!Expect(rch_engine_create(&engine) == RCH_RESULT_OK,
               "engine creation must succeed for slow-backend validation")
       || !Expect(rch_view_create(engine, "slow-backend-view", &view) == RCH_RESULT_OK,
@@ -49,11 +50,25 @@ int main()
                  "sender creation must use the existing composed View output")
       || !Expect(robocamhub::testing::SetNdiSenderBackendDelay(sender, 800U) == RCH_RESULT_OK,
                  "test-only backend delay must configure before sender start")
+      || !Expect(rch_ndi_sender_create(view, "ROBOCAM - Independent Sender",
+                                       &independent_sender) == RCH_RESULT_OK,
+                 "a second sender must share the same composed View")
       || !Expect(rch_ndi_sender_start(sender) == RCH_RESULT_OK,
-                 "slow deterministic sender must start")) {
-    if (sender != nullptr) rch_ndi_sender_destroy(sender);
-    if (view != nullptr) rch_view_destroy(view);
-    if (engine != nullptr) rch_engine_destroy(engine);
+                 "slow deterministic sender must start")
+      || !Expect(rch_ndi_sender_start(independent_sender) == RCH_RESULT_OK,
+                 "independent sender must start alongside the slow sender")) {
+    if (independent_sender != nullptr) {
+      rch_ndi_sender_destroy(independent_sender);
+    }
+    if (sender != nullptr) {
+      rch_ndi_sender_destroy(sender);
+    }
+    if (view != nullptr) {
+      rch_view_destroy(view);
+    }
+    if (engine != nullptr) {
+      rch_engine_destroy(engine);
+    }
     return 1;
   }
 
@@ -70,12 +85,16 @@ int main()
   }
 
   bool blocked_view_ok = false;
+  bool independent_before_ok = false;
   const auto blocked_view = ViewStatus(view, blocked_view_ok);
+  const auto independent_before = SenderStatus(independent_sender, independent_before_ok);
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   bool advanced_view_ok = false;
   bool still_blocked_sender_ok = false;
+  bool independent_after_ok = false;
   const auto advanced_view = ViewStatus(view, advanced_view_ok);
   const auto still_blocked_sender = SenderStatus(sender, still_blocked_sender_ok);
+  const auto independent_after = SenderStatus(independent_sender, independent_after_ok);
 
   bool first_send_observed = false;
   rch_ndi_sender_status_v1 first_send{};
@@ -110,12 +129,18 @@ int main()
   const bool passed =
     Expect(sender_blocked && blocked_view_ok && advanced_view_ok && still_blocked_sender_ok,
            "sender and View snapshots must be available while the backend is blocked")
+    && Expect(blocked_view.output_consumer_count == 2U,
+              "two senders must remain two consumers of one composed View")
     && Expect(advanced_view.latest_composed_frame_sequence
                 > blocked_view.latest_composed_frame_sequence,
               "compositor must advance while the sender backend is blocked")
     && Expect(still_blocked_sender.sent_frame_count == 0U
                 && still_blocked_sender.unique_sequence_observed_count == 1U,
               "blocked sender must not catch up or queue additional frames")
+    && Expect(independent_before_ok && independent_after_ok
+                && independent_after.sent_frame_count > independent_before.sent_frame_count
+                && independent_after.latest_sent_sequence > independent_before.latest_sent_sequence,
+              "a slow sender must not stall an independent sender sharing the same View")
     && Expect(first_send_observed && second_send_observed && final_view_ok,
               "slow backend must eventually accept two frames")
     && Expect(second_send.sent_frame_count == first_send.sent_frame_count + 1U,
@@ -130,12 +155,18 @@ int main()
               "slow sender must retain at most one in-flight frame and no backlog");
 
   const auto stop_result = rch_ndi_sender_stop(sender);
+  const auto independent_stop_result = rch_ndi_sender_stop(independent_sender);
   const auto sender_destroy_result = rch_ndi_sender_destroy(sender);
+  const auto independent_destroy_result = rch_ndi_sender_destroy(independent_sender);
   const auto view_destroy_result = rch_view_destroy(view);
   const auto engine_destroy_result = rch_engine_destroy(engine);
   return passed
       && Expect(stop_result == RCH_RESULT_OK, "slow sender stop must remain deterministic")
+      && Expect(independent_stop_result == RCH_RESULT_OK,
+                "independent sender stop must remain deterministic")
       && Expect(sender_destroy_result == RCH_RESULT_OK, "slow sender destroy must release ownership")
+      && Expect(independent_destroy_result == RCH_RESULT_OK,
+                "independent sender destroy must release its own ownership")
       && Expect(view_destroy_result == RCH_RESULT_OK, "View destroy must remain safe after slow sender")
       && Expect(engine_destroy_result == RCH_RESULT_OK, "engine teardown must remain safe after slow sender")
     ? 0

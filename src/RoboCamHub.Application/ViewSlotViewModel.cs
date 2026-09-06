@@ -7,6 +7,7 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
 {
     private IWorkspaceRuntimeService? _runtime;
     private readonly IUiDispatcher _dispatcher;
+    private readonly string _viewId;
     private string? _assignedCameraId;
     private string _assignedCameraName = "Unassigned";
     private CameraItemViewModel? _selectedCamera;
@@ -15,12 +16,14 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
     private string? _operatorMessage;
 
     internal ViewSlotViewModel(
+        string viewId,
         uint slotIndex,
         string? initialCameraId,
         ObservableCollection<CameraItemViewModel> cameras,
         IWorkspaceRuntimeService runtime,
         IUiDispatcher dispatcher)
     {
+        _viewId = viewId;
         SlotIndex = slotIndex;
         AvailableCameras = cameras ?? throw new ArgumentNullException(nameof(cameras));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
@@ -178,7 +181,10 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
         await SetBusyAsync(true).ConfigureAwait(false);
         try
         {
-            await runtime.BindCameraSourceAsync(SlotIndex, selected.Definition.Id).ConfigureAwait(false);
+            await runtime.BindCameraSourceAsync(
+                _viewId,
+                SlotIndex,
+                selected.Definition.Id).ConfigureAwait(false);
             await _dispatcher.InvokeAsync(() =>
             {
                 ApplyLiveAssignment(selected.Definition.Id);
@@ -208,7 +214,7 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
         await SetBusyAsync(true).ConfigureAwait(false);
         try
         {
-            await runtime.UnbindSourceAsync(SlotIndex).ConfigureAwait(false);
+            await runtime.UnbindSourceAsync(_viewId, SlotIndex).ConfigureAwait(false);
             await _dispatcher.InvokeAsync(() =>
             {
                 ApplyLiveAssignment(null);

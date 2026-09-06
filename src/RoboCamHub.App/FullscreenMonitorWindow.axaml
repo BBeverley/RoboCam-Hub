@@ -1,0 +1,47 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:RoboCamHub.Application;assembly=RoboCamHub.Application"
+        xmlns:local="clr-namespace:RoboCamHub.App"
+        x:Class="RoboCamHub.App.FullscreenMonitorWindow"
+        x:DataType="vm:WorkspaceViewModel"
+        Background="#000000"
+        WindowDecorations="None"
+        WindowState="FullScreen"
+        Title="RoboCam-Hub — Fullscreen Monitor">
+    <Grid x:Name="FullscreenRoot" Focusable="True" RowDefinitions="*,Auto">
+        <local:NativeViewPreviewHost x:Name="FullscreenPreviewHost"
+                                     Grid.Row="0"
+                                     Focusable="False"
+                                     HorizontalAlignment="Stretch"
+                                     VerticalAlignment="Stretch" />
+        <Border x:Name="Controls"
+                Grid.Row="1"
+                Background="#E6111820"
+                BorderBrush="#334453"
+                BorderThickness="0,1,0,0"
+                Padding="18,10">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="10">
+                <TextBlock VerticalAlignment="Center"
+                           FontSize="16"
+                           FontWeight="SemiBold"
+                           Foreground="#F3F7FA"
+                           Text="{Binding FullscreenViewName}" />
+                <ComboBox Grid.Column="1"
+                          Width="240"
+                          ItemsSource="{Binding Views}"
+                          SelectedItem="{Binding PendingSelectedView, Mode=TwoWay}">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ViewWorkspaceViewModel">
+                            <TextBlock Text="{Binding Name}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Grid.Column="2"
+                        HorizontalAlignment="Left"
+                        Command="{Binding SelectViewCommand}"
+                        Content="Show View" />
+                <Button Grid.Column="3" Click="OnExitFullscreen" Content="Exit Fullscreen" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

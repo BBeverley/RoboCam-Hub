@@ -15,7 +15,8 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
         ViewDefinition definition,
         ObservableCollection<CameraItemViewModel> cameras,
         IWorkspaceRuntimeService runtime,
-        IUiDispatcher dispatcher)
+        IUiDispatcher dispatcher,
+        WorkspaceCapabilities capabilities)
     {
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
         Editor = new ViewEditorViewModel(
@@ -23,6 +24,7 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
             cameras,
             runtime,
             dispatcher,
+            capabilities,
             appliedDefinition => Definition = appliedDefinition);
         Slots = new ObservableCollection<ViewSlotViewModel>(
             Enumerable.Range(0, ViewDefinition.SlotCount)
@@ -32,7 +34,8 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
                     definition.GetCameraId(slotIndex),
                     cameras,
                     runtime,
-                    dispatcher)));
+                    dispatcher,
+                    capabilities)));
     }
 
     public ViewDefinition Definition { get; private set; }

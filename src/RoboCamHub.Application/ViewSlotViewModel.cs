@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using RoboCamHub.Runtime;
 
 namespace RoboCamHub.Application;
@@ -8,6 +9,7 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
     private IWorkspaceRuntimeService? _runtime;
     private readonly IUiDispatcher _dispatcher;
     private readonly string _viewId;
+    private readonly WorkspaceCapabilities _capabilities;
     private string? _assignedCameraId;
     private string _assignedCameraName = "Unassigned";
     private CameraItemViewModel? _selectedCamera;
@@ -21,13 +23,16 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
         string? initialCameraId,
         ObservableCollection<CameraItemViewModel> cameras,
         IWorkspaceRuntimeService runtime,
-        IUiDispatcher dispatcher)
+        IUiDispatcher dispatcher,
+        WorkspaceCapabilities capabilities)
     {
         _viewId = viewId;
         SlotIndex = slotIndex;
         AvailableCameras = cameras ?? throw new ArgumentNullException(nameof(cameras));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+        _capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
+        _capabilities.PropertyChanged += OnCapabilitiesChanged;
         _assignedCameraId = initialCameraId;
         _assignedCameraName = ResolveCameraName(initialCameraId);
         _selectedCamera = cameras.FirstOrDefault(camera => camera.Definition.Id == initialCameraId);
@@ -139,11 +144,15 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
     public bool HasOperatorMessage => !string.IsNullOrWhiteSpace(OperatorMessage);
 
     public bool CanAssign => _runtime is not null
+        && _capabilities.CanEditCameraAssignments
         && !IsBusy
         && SelectedCamera is not null
         && !string.Equals(SelectedCamera.Definition.Id, AssignedCameraId, StringComparison.Ordinal);
 
-    public bool CanRemove => _runtime is not null && !IsBusy && AssignedCameraId is not null;
+    public bool CanRemove => _runtime is not null
+        && _capabilities.CanEditCameraAssignments
+        && !IsBusy
+        && AssignedCameraId is not null;
 
     public AsyncCommand AssignCommand { get; }
 
@@ -165,6 +174,7 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _capabilities.PropertyChanged -= OnCapabilitiesChanged;
         _runtime = null;
         RaiseCommandState();
     }
@@ -266,5 +276,14 @@ public sealed class ViewSlotViewModel : ObservableObject, IDisposable
         RaisePropertyChanged(nameof(CanRemove));
         AssignCommand.RaiseCanExecuteChanged();
         RemoveCommand.RaiseCanExecuteChanged();
+    }
+
+    private void OnCapabilitiesChanged(object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (eventArgs.PropertyName is nameof(WorkspaceCapabilities.Mode)
+            or nameof(WorkspaceCapabilities.CanEditCameraAssignments))
+        {
+            RaiseCommandState();
+        }
     }
 }

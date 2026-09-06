@@ -93,6 +93,10 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public int PreviewSwitchCount { get; private set; }
 
+    public int PreviewAttachCount { get; private set; }
+
+    public int PreviewDetachCount { get; private set; }
+
     public int ApplyViewSceneCallCount { get; private set; }
 
     public IReadOnlyList<ViewSceneElementDefinition>? LastAppliedScene { get; private set; }
@@ -247,6 +251,7 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         host.Validate();
         SelectedViewId = viewId;
         PreviewAttached = true;
+        PreviewAttachCount++;
         PreviewStatus = CreatePreviewStatus(ViewPreviewRuntimeState.Starting, viewId);
     }
 
@@ -270,6 +275,10 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public void DetachPreview()
     {
+        if (PreviewAttached)
+        {
+            PreviewDetachCount++;
+        }
         PreviewAttached = false;
         PreviewStatus = null;
     }

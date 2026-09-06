@@ -102,20 +102,41 @@
                     BorderBrush="#2C3A48"
                     BorderThickness="0,0,0,1"
                     Padding="22,0">
-                <Grid ColumnDefinitions="*,Auto">
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
                     <StackPanel VerticalAlignment="Center" Spacing="2">
                         <TextBlock FontSize="22" FontWeight="SemiBold" Text="{Binding ApplicationTitle}" />
-                        <TextBlock Classes="secondary" Text="Mixed camera, text, image, shape and frame editor · Gate 6D" />
+                        <TextBlock Classes="secondary" Text="Operator-safe live workspace · Gate 6E" />
                     </StackPanel>
-                    <Border Grid.Column="1"
+                    <StackPanel Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Orientation="Horizontal"
+                                Spacing="6">
+                        <Button Classes="compact"
+                                Command="{Binding ExitShowModeCommand}"
+                                Content="EDIT MODE" />
+                        <Button Classes="compact"
+                                Command="{Binding EnterShowModeCommand}"
+                                Content="SHOW MODE" />
+                    </StackPanel>
+                    <Border Grid.Column="2"
                             VerticalAlignment="Center"
-                            Background="#253B50"
+                            Background="{Binding ModeBackgroundColor}"
                             CornerRadius="5"
                             Padding="12,6">
-                        <TextBlock FontSize="11"
-                                   FontWeight="Bold"
-                                   Foreground="#9DD3FF"
-                                   Text="{Binding ModeText}" />
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <StackPanel>
+                                <TextBlock FontSize="11"
+                                           FontWeight="Bold"
+                                           Foreground="{Binding ModeForegroundColor}"
+                                           Text="{Binding ModeText}" />
+                                <TextBlock FontSize="10"
+                                           Foreground="{Binding ModeForegroundColor}"
+                                           Text="{Binding ModeDetailText}" />
+                            </StackPanel>
+                            <Button Classes="compact"
+                                    Click="OnEnterFullscreen"
+                                    Content="Fullscreen" />
+                        </StackPanel>
                     </Border>
                 </Grid>
             </Border>
@@ -133,7 +154,11 @@
                                        Text="{Binding MediaOwnershipText}" />
                         </Grid>
 
-                        <Border Grid.Row="1" Background="#111820" CornerRadius="6" Padding="10">
+                        <Border Grid.Row="1"
+                                Background="#111820"
+                                CornerRadius="6"
+                                IsEnabled="{Binding CanEditCameraAssignments}"
+                                Padding="10">
                             <StackPanel Spacing="8">
                                 <TextBlock FontWeight="SemiBold" Text="Add camera" />
                                 <TextBox PlaceholderText="Name (for example Spot 1)"
@@ -176,6 +201,7 @@
                                                     <Button Classes="compact" Command="{Binding StartCommand}" Content="Start" />
                                                     <Button Classes="compact" Command="{Binding StopCommand}" Content="Stop" />
                                                     <Button Classes="compact"
+                                                            IsEnabled="{Binding $parent[Window].DataContext.CanEditScene}"
                                                             Content="Add to View"
                                                             Click="OnAddCameraToView" />
                                                     <TextBlock VerticalAlignment="Center"
@@ -235,15 +261,22 @@
                                 <Button Grid.Column="3"
                                         Classes="compact"
                                         Click="OnCreateView"
-                                        Content="Add View…" />
+                                        Content="Add View…"
+                                        IsEnabled="{Binding CanCreateView}" />
                                 <Button Grid.Column="4"
                                         Classes="compact"
                                         Click="OnDuplicateView"
-                                        Content="Duplicate View…" />
+                                        Content="Duplicate View…"
+                                        IsEnabled="{Binding CanCreateView}" />
                             </Grid>
                         </Grid>
 
-                        <Border Grid.Row="1" Background="#111820" CornerRadius="6" Padding="8">
+                        <Border x:Name="EditorToolbar"
+                                Grid.Row="1"
+                                Background="#111820"
+                                CornerRadius="6"
+                                IsVisible="{Binding CanEditScene}"
+                                Padding="8">
                             <Grid ColumnDefinitions="220,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
                                 <ComboBox Grid.Column="0"
                                           ItemsSource="{Binding SelectedView.Editor.Elements}"
@@ -279,20 +312,22 @@
                             </Grid>
                         </Border>
 
-                        <Grid Grid.Row="2" ColumnDefinitions="*,300" ColumnSpacing="12">
-                            <Border Grid.Column="0"
+                        <Grid x:Name="EditorPreviewGrid" Grid.Row="2" ColumnDefinitions="*,300" ColumnSpacing="12">
+                            <Border x:Name="EditorCanvasPanel"
+                                    Grid.Column="0"
                                     Background="#05080B"
                                     BorderBrush="#334453"
                                     BorderThickness="1"
                                     CornerRadius="6"
-                                    ClipToBounds="True">
+                                    ClipToBounds="True"
+                                    IsVisible="{Binding CanEditScene}">
                                 <local:ViewEditorCanvas x:Name="EditorCanvas"
                                                         Focusable="True"
                                                         HorizontalAlignment="Stretch"
                                                         VerticalAlignment="Stretch" />
                             </Border>
 
-                            <Grid Grid.Column="1" RowDefinitions="Auto,169,Auto" RowSpacing="8">
+                            <Grid x:Name="NativePreviewPanel" Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
                                 <TextBlock Classes="sectionTitle" Text="CLEAN NATIVE PREVIEW" />
                                 <Border Grid.Row="1"
                                         Background="#05080B"
@@ -306,7 +341,7 @@
                                 </Border>
                                 <TextBlock Grid.Row="2"
                                            Classes="secondary"
-                                           Text="Selection chrome exists only on the editor canvas." />
+                                           Text="Clean compositor pixels; operator chrome remains local." />
                             </Grid>
                         </Grid>
 
@@ -343,7 +378,10 @@
             <Border Grid.Row="2" Classes="panel" Margin="16,0,16,16" Padding="14">
                 <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
                     <TextBlock Grid.Row="0" Classes="sectionTitle" Text="OUTPUTS" />
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10">
+                    <StackPanel Grid.Row="1"
+                                Orientation="Horizontal"
+                                Spacing="10"
+                                IsEnabled="{Binding CanConfigureOutputs}">
                             <TextBox Width="220" PlaceholderText="Output name"
                                      Text="{Binding NewOutputName, Mode=TwoWay}" />
                             <TextBox Width="300" PlaceholderText="NDI source name"

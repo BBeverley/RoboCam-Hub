@@ -122,6 +122,5 @@ for license in "$gst_root/share/gstreamer-1.0/LICENSE" "$gst_root/COPYING" "$gst
   fi
 done
 codesign --force --sign - "$macos/librobocamhub_native.dylib"
-codesign --force --sign - "$app"
 "$repo_root/scripts/verify-package.sh" "$app"
 echo "Created $app"

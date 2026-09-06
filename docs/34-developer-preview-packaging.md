@@ -103,8 +103,8 @@ runtime DLL dependencies delivered by the official GStreamer redistributable,
 so Visual C++ Build Tools are not required on the target machine. Windows may
 show a SmartScreen warning because the executable is not Authenticode-signed.
 
-The macOS bundle is ad-hoc signed only so relocated nested libraries load as one
-bundle. This is not a production identity or notarisation. Gatekeeper may warn or
+Relocated macOS Mach-O libraries are ad-hoc signed so they can load, but the app
+bundle has no production identity and is not notarised. Gatekeeper may warn or
 block a downloaded artifact; use Finder's **Open** confirmation for this trusted
 developer-preview build. Do not remove quarantine globally.
 

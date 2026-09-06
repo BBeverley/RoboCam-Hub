@@ -44,6 +44,7 @@ Start with:
 - [`13-performance-targets.md`](docs/13-performance-targets.md)
 - [`16-development-roadmap.md`](docs/16-development-roadmap.md)
 - [`27-gate-5d-multiple-views-outputs.md`](docs/27-gate-5d-multiple-views-outputs.md)
+- [`32-gate-6e-show-mode-fullscreen.md`](docs/32-gate-6e-show-mode-fullscreen.md)
 
 ## Project status
 

@@ -22,6 +22,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     private ViewWorkspaceViewModel? _pendingOutputView;
     private CameraItemViewModel? _locatedCamera;
     private string? _workspaceMessage;
+    private bool _isFullscreen;
     private int _disposed;
 
     public WorkspaceViewModel(
@@ -31,12 +32,14 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatcher = dispatcher ?? new ImmediateUiDispatcher();
+        Capabilities = new WorkspaceCapabilities();
+        Capabilities.PropertyChanged += OnCapabilitiesChanged;
         Cameras = new ObservableCollection<CameraItemViewModel>(
             runtime.CameraDefinitions.Select(
                 definition => new CameraItemViewModel(definition, runtime, _dispatcher)));
         Views = new ObservableCollection<ViewWorkspaceViewModel>(
             runtime.ViewDefinitions.Select(
-                definition => new ViewWorkspaceViewModel(definition, Cameras, runtime, _dispatcher)));
+                definition => new ViewWorkspaceViewModel(definition, Cameras, runtime, _dispatcher, Capabilities)));
         _selectedView = Views.FirstOrDefault(view => string.Equals(
                 view.Definition.Id,
                 runtime.SelectedViewId,
@@ -53,6 +56,8 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         AddViewCommand = new AsyncCommand(AddViewAsync, () => CanAddView);
         SelectViewCommand = new AsyncCommand(SelectViewAsync, () => CanSelectView);
         AddOutputCommand = new AsyncCommand(AddOutputAsync, () => CanAddOutput);
+        EnterShowModeCommand = new AsyncCommand(EnterShowModeAsync, () => CanEnterShowMode);
+        ExitShowModeCommand = new AsyncCommand(ExitShowModeAsync, () => CanExitShowMode);
         _polling = new StatusPollingService(
             RefreshStatusAsync,
             pollingInterval ?? TimeSpan.FromMilliseconds(333),
@@ -61,7 +66,47 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
 
     public string ApplicationTitle => "RoboCam-Hub";
 
-    public string ModeText => "EDIT MODE";
+    public WorkspaceCapabilities Capabilities { get; }
+
+    public WorkspaceMode Mode => Capabilities.Mode;
+
+    public bool IsEditMode => Mode == WorkspaceMode.Edit;
+
+    public bool IsShowMode => Mode == WorkspaceMode.Show;
+
+    public string ModeText => IsShowMode ? "SHOW MODE" : "EDIT MODE";
+
+    public string ModeDetailText => IsShowMode ? "Scene editing locked" : "Scene editing enabled";
+
+    public string ModeBackgroundColor => IsShowMode ? "#315E52" : "#253B50";
+
+    public string ModeForegroundColor => IsShowMode ? "#B9F4DE" : "#9DD3FF";
+
+    public bool CanEditScene => Capabilities.CanEditScene;
+
+    public bool CanCreateView => Capabilities.CanCreateView;
+
+    public bool CanEditCameraAssignments => Capabilities.CanEditCameraAssignments;
+
+    public bool CanConfigureOutputs => Capabilities.CanConfigureOutputs;
+
+    public bool CanOperateOutputs => Capabilities.CanOperateOutputs;
+
+    public bool CanSwitchPreviewView => Capabilities.CanSwitchPreviewView;
+
+    public bool CanEnterShowMode => _runtime is not null && IsEditMode;
+
+    public bool CanExitShowMode => _runtime is not null && IsShowMode;
+
+    public bool IsFullscreen
+    {
+        get => _isFullscreen;
+        private set => SetProperty(ref _isFullscreen, value);
+    }
+
+    public string FullscreenViewId => SelectedView.Definition.Id;
+
+    public string FullscreenViewName => SelectedView.Name;
 
     public ObservableCollection<CameraItemViewModel> Cameras { get; }
 
@@ -224,11 +269,13 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     }
 
     public bool CanAddCamera => _runtime is not null
+        && CanEditCameraAssignments
         && !IsAddingCamera
         && !string.IsNullOrWhiteSpace(NewCameraName)
         && !string.IsNullOrWhiteSpace(NewCameraRtspUrl);
 
     public bool CanAddView => _runtime is not null
+        && CanCreateView
         && !IsAddingView
         && !string.IsNullOrWhiteSpace(NewViewName);
 
@@ -238,6 +285,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         && !ReferenceEquals(PendingSelectedView, SelectedView);
 
     public bool CanAddOutput => _runtime is not null
+        && CanConfigureOutputs
         && !IsAddingOutput
         && PendingOutputView is not null
         && !string.IsNullOrWhiteSpace(NewOutputName)
@@ -265,6 +313,32 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
 
     public AsyncCommand AddOutputCommand { get; }
 
+    public AsyncCommand EnterShowModeCommand { get; }
+
+    public AsyncCommand ExitShowModeCommand { get; }
+
+    public bool EnterFullscreen()
+    {
+        if (_runtime is null || IsFullscreen || !Capabilities.CanUseFullscreen)
+        {
+            return false;
+        }
+        IsFullscreen = true;
+        return true;
+    }
+
+    public bool ExitFullscreen()
+    {
+        if (!IsFullscreen)
+        {
+            return false;
+        }
+        IsFullscreen = false;
+        return true;
+    }
+
+    public bool HandleEscape() => ExitFullscreen();
+
     public void StartStatusPolling() => _polling.Start();
 
     public void LocateCamera(string cameraId)
@@ -285,7 +359,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(definition);
         var runtime = _runtime;
-        if (runtime is null || IsAddingView)
+        if (runtime is null || IsAddingView || !CanCreateView)
         {
             return false;
         }
@@ -300,7 +374,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
             await runtime.AddViewAsync(definition).ConfigureAwait(false);
             await _dispatcher.InvokeAsync(() =>
             {
-                var view = new ViewWorkspaceViewModel(definition, Cameras, runtime, _dispatcher);
+                var view = new ViewWorkspaceViewModel(definition, Cameras, runtime, _dispatcher, Capabilities);
                 Views.Add(view);
                 PendingSelectedView = view;
                 PendingOutputView ??= view;
@@ -334,6 +408,9 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         }
 
         await _polling.DisposeAsync().ConfigureAwait(false);
+        ExitFullscreen();
+        Capabilities.Mode = WorkspaceMode.Edit;
+        Capabilities.PropertyChanged -= OnCapabilitiesChanged;
         foreach (var output in Outputs)
         {
             output.Dispose();
@@ -396,6 +473,18 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private Task EnterShowModeAsync()
+    {
+        Capabilities.Mode = WorkspaceMode.Show;
+        return Task.CompletedTask;
+    }
+
+    private Task ExitShowModeAsync()
+    {
+        Capabilities.Mode = WorkspaceMode.Edit;
+        return Task.CompletedTask;
+    }
+
     private async Task AddViewAsync()
     {
         if (_runtime is null || IsAddingView)
@@ -437,6 +526,8 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
                     SelectedView.Editor.ClearSelection();
                     target.Editor.ClearSelection();
                     SelectedView = target;
+                    RaisePropertyChanged(nameof(FullscreenViewId));
+                    RaisePropertyChanged(nameof(FullscreenViewName));
                 }
             }
             finally
@@ -547,6 +638,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         RaiseAddViewCommandState();
         RaiseSelectViewCommandState();
         RaiseAddOutputCommandState();
+        RaiseModeCommandStates();
     }
 
     private void RaiseAddCameraCommandState()
@@ -571,5 +663,37 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     {
         RaisePropertyChanged(nameof(CanAddOutput));
         AddOutputCommand.RaiseCanExecuteChanged();
+    }
+
+    private void RaiseModeCommandStates()
+    {
+        RaisePropertyChanged(nameof(CanEnterShowMode));
+        RaisePropertyChanged(nameof(CanExitShowMode));
+        EnterShowModeCommand.RaiseCanExecuteChanged();
+        ExitShowModeCommand.RaiseCanExecuteChanged();
+    }
+
+    private void OnCapabilitiesChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs eventArgs)
+    {
+        if (eventArgs.PropertyName != nameof(WorkspaceCapabilities.Mode))
+        {
+            return;
+        }
+
+        RaisePropertyChanged(nameof(Mode));
+        RaisePropertyChanged(nameof(IsEditMode));
+        RaisePropertyChanged(nameof(IsShowMode));
+        RaisePropertyChanged(nameof(ModeText));
+        RaisePropertyChanged(nameof(ModeDetailText));
+        RaisePropertyChanged(nameof(ModeBackgroundColor));
+        RaisePropertyChanged(nameof(ModeForegroundColor));
+        RaisePropertyChanged(nameof(CanEditScene));
+        RaisePropertyChanged(nameof(CanCreateView));
+        RaisePropertyChanged(nameof(CanEditCameraAssignments));
+        RaisePropertyChanged(nameof(CanConfigureOutputs));
+        RaiseAddCameraCommandState();
+        RaiseAddViewCommandState();
+        RaiseAddOutputCommandState();
+        RaiseModeCommandStates();
     }
 }

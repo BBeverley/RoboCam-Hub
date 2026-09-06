@@ -4,6 +4,24 @@
 
 Define how RoboCam-Hub transitions from layout creation into normal show operation without introducing a separate operational workspace.
 
+## Gate 6E implementation status
+
+Gate 6E implements the global session-only Edit/Show capability state and one
+fullscreen local monitor window. Entering Show Mode cancels pending canvas
+gestures and property drafts, restores the last applied scene, clears editor
+selection and disables all scene, View-creation, camera-assignment and Output-
+configuration entry points. Camera and Output status polling, local View
+selection, fullscreen monitoring and Output Start/Stop/Restart remain enabled.
+
+Fullscreen transfers the one existing Gate 5C preview attachment between the
+normal workspace host and a borderless fullscreen host. It never creates a
+View, compositor, ingest session, decoder or Output, and local View selection
+continues to be independent from stable Output `ViewId` routing. The minimal
+fullscreen control strip remains deliberately slim and visible; Escape and F11
+exit. See
+`docs/32-gate-6e-show-mode-fullscreen.md` for the exact implementation and
+validation boundary.
+
 The operating model is intentionally simple:
 
 - the normal View workspace is also the show-operation workspace;

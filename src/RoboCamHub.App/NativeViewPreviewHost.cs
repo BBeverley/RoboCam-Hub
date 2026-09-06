@@ -36,6 +36,8 @@ internal sealed class NativeViewPreviewHost : NativeControlHost
         }
     }
 
+    public void ReattachPreview() => AttachIfReady();
+
     protected override IPlatformHandle CreateNativeControlCore(IPlatformHandle parent)
     {
         _hostControl = base.CreateNativeControlCore(parent);

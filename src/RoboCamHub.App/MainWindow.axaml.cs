@@ -1,6 +1,8 @@
 using System.ComponentModel;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using RoboCamHub.Application;
 using RoboCamHub.Domain;
@@ -13,6 +15,8 @@ public partial class MainWindow : Window
     private WorkspaceViewModel? _workspace;
     private bool _allowClose;
     private bool _shutdownStarted;
+    private Window? _propertiesWindow;
+    private FullscreenMonitorWindow? _fullscreenWindow;
 
     public MainWindow()
     {
@@ -21,6 +25,7 @@ public partial class MainWindow : Window
         EditorCanvas.LocateSourceRequested += OnLocateSourceRequested;
         Opened += OnOpened;
         Closing += OnClosing;
+        KeyDown += OnKeyDown;
     }
 
     private async void OnOpened(object? sender, EventArgs eventArgs)
@@ -42,6 +47,7 @@ public partial class MainWindow : Window
             StartupPanel.IsVisible = false;
             WorkspaceRoot.IsVisible = true;
             _workspace.StartStatusPolling();
+            UpdateModePresentation();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -76,6 +82,10 @@ public partial class MainWindow : Window
 
     private async Task DisposeAndCloseAsync()
     {
+        _propertiesWindow?.Close();
+        _propertiesWindow = null;
+        _fullscreenWindow?.Close();
+        _fullscreenWindow = null;
         ViewPreviewHost.DetachPreview();
         EditorCanvas.Editor = null;
         _workspace!.PropertyChanged -= OnWorkspacePropertyChanged;
@@ -93,11 +103,16 @@ public partial class MainWindow : Window
         {
             EditorCanvas.Editor = _workspace.SelectedView.Editor;
         }
+        if (eventArgs.PropertyName == nameof(WorkspaceViewModel.Mode))
+        {
+            UpdateModePresentation();
+        }
     }
 
     private async void OnAddCameraToView(object? sender, RoutedEventArgs eventArgs)
     {
-        if (sender is Button { DataContext: CameraItemViewModel camera } && _workspace is not null)
+        if (sender is Button { DataContext: CameraItemViewModel camera }
+            && _workspace is { CanEditScene: true })
         {
             await _workspace.SelectedView.Editor.AddCameraAsync(camera.Definition.Id);
             EditorCanvas.Focus();
@@ -106,7 +121,7 @@ public partial class MainWindow : Window
 
     private async void OnAddCamera(object? sender, RoutedEventArgs eventArgs)
     {
-        if (_workspace is null)
+        if (_workspace is not { CanEditScene: true })
         {
             return;
         }
@@ -120,7 +135,7 @@ public partial class MainWindow : Window
 
     private async void OnAddText(object? sender, RoutedEventArgs eventArgs)
     {
-        if (EditorCanvas.Editor is { } editor)
+        if (EditorCanvas.Editor is { CanEditScene: true } editor)
         {
             await editor.AddTextAsync();
             EditorCanvas.Focus();
@@ -129,7 +144,7 @@ public partial class MainWindow : Window
 
     private async void OnAddRectangle(object? sender, RoutedEventArgs eventArgs)
     {
-        if (EditorCanvas.Editor is { } editor)
+        if (EditorCanvas.Editor is { CanEditScene: true } editor)
         {
             await editor.AddRectangleAsync();
             EditorCanvas.Focus();
@@ -138,7 +153,7 @@ public partial class MainWindow : Window
 
     private async void OnAddFrame(object? sender, RoutedEventArgs eventArgs)
     {
-        if (EditorCanvas.Editor is { } editor)
+        if (EditorCanvas.Editor is { CanEditScene: true } editor)
         {
             await editor.AddFrameAsync();
             EditorCanvas.Focus();
@@ -148,7 +163,7 @@ public partial class MainWindow : Window
     private async void OnAddImage(object? sender, RoutedEventArgs eventArgs)
     {
         var editor = EditorCanvas.Editor;
-        if (editor is null)
+        if (editor is not { CanEditScene: true })
         {
             return;
         }
@@ -197,7 +212,7 @@ public partial class MainWindow : Window
     private async void OnCreateView(object? sender, RoutedEventArgs eventArgs)
     {
         var workspace = _workspace;
-        if (workspace is null)
+        if (workspace is not { CanCreateView: true })
         {
             return;
         }
@@ -213,7 +228,7 @@ public partial class MainWindow : Window
     private async void OnDuplicateView(object? sender, RoutedEventArgs eventArgs)
     {
         var workspace = _workspace;
-        if (workspace is null)
+        if (workspace is not { CanCreateView: true })
         {
             return;
         }
@@ -229,7 +244,7 @@ public partial class MainWindow : Window
     private void OnEditorElementSelectionChanged(object? sender, SelectionChangedEventArgs eventArgs)
     {
         if (sender is ComboBox { SelectedItem: ViewEditorElementViewModel element }
-            && EditorCanvas.Editor is { } editor)
+            && EditorCanvas.Editor is { CanEditScene: true } editor)
         {
             editor.SelectElement(element.Id);
         }
@@ -237,7 +252,7 @@ public partial class MainWindow : Window
 
     private async void OnDuplicate(object? sender, RoutedEventArgs eventArgs)
     {
-        if (EditorCanvas.Editor is { } editor)
+        if (EditorCanvas.Editor is { CanEditScene: true } editor)
         {
             await editor.DuplicateSelectedAsync();
         }
@@ -245,7 +260,7 @@ public partial class MainWindow : Window
 
     private async void OnDeleteElement(object? sender, RoutedEventArgs eventArgs)
     {
-        if (EditorCanvas.Editor is { } editor)
+        if (EditorCanvas.Editor is { CanEditScene: true } editor)
         {
             await editor.DeleteSelectedAsync();
         }
@@ -253,7 +268,7 @@ public partial class MainWindow : Window
 
     private async void OnBringForward(object? sender, RoutedEventArgs eventArgs)
     {
-        if (EditorCanvas.Editor is { } editor)
+        if (EditorCanvas.Editor is { CanEditScene: true } editor)
         {
             await editor.BringForwardAsync();
         }
@@ -261,7 +276,7 @@ public partial class MainWindow : Window
 
     private async void OnSendBackward(object? sender, RoutedEventArgs eventArgs)
     {
-        if (EditorCanvas.Editor is { } editor)
+        if (EditorCanvas.Editor is { CanEditScene: true } editor)
         {
             await editor.SendBackwardAsync();
         }
@@ -274,11 +289,15 @@ public partial class MainWindow : Window
     private void OpenProperties()
     {
         var editor = EditorCanvas.Editor;
+        if (editor is not { CanEditScene: true })
+        {
+            return;
+        }
         if (editor?.SelectedElement?.Definition is CameraElementDefinition)
         {
             if (editor.BeginProperties() is not null)
             {
-                _ = new CameraElementPropertiesWindow(editor).ShowDialog(this);
+                ShowPropertiesWindow(new CameraElementPropertiesWindow(editor));
             }
             return;
         }
@@ -286,9 +305,87 @@ public partial class MainWindow : Window
         {
             return;
         }
-        _ = new VisualElementPropertiesWindow(editor).ShowDialog(this);
+        ShowPropertiesWindow(new VisualElementPropertiesWindow(editor));
     }
 
     private void OnLocateSourceRequested(object? sender, string cameraId)
         => _workspace?.LocateCamera(cameraId);
+
+    private void ShowPropertiesWindow(Window window)
+    {
+        _propertiesWindow?.Close();
+        _propertiesWindow = window;
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_propertiesWindow, window))
+            {
+                _propertiesWindow = null;
+            }
+        };
+        _ = window.ShowDialog(this);
+    }
+
+    private void OnEnterFullscreen(object? sender, RoutedEventArgs eventArgs) => EnterFullscreen();
+
+    private void OnKeyDown(object? sender, KeyEventArgs eventArgs)
+    {
+        if (eventArgs.Key == Key.F11 && _fullscreenWindow is null)
+        {
+            eventArgs.Handled = true;
+            EnterFullscreen();
+        }
+    }
+
+    private void EnterFullscreen()
+    {
+        var workspace = _workspace;
+        if (workspace is null || _fullscreenWindow is not null || !workspace.EnterFullscreen())
+        {
+            return;
+        }
+
+        ViewPreviewHost.DetachPreview();
+        var fullscreen = new FullscreenMonitorWindow(workspace);
+        _fullscreenWindow = fullscreen;
+        fullscreen.Closed += (_, _) =>
+        {
+            if (!ReferenceEquals(_fullscreenWindow, fullscreen))
+            {
+                return;
+            }
+            _fullscreenWindow = null;
+            workspace.ExitFullscreen();
+            if (!_shutdownStarted)
+            {
+                ViewPreviewHost.ReattachPreview();
+            }
+        };
+        fullscreen.Show();
+        fullscreen.WindowState = WindowState.FullScreen;
+    }
+
+    private void UpdateModePresentation()
+    {
+        if (_workspace is null)
+        {
+            return;
+        }
+
+        Title = $"RoboCam-Hub — {(_workspace.IsShowMode ? "Show Mode" : "Edit Mode")}";
+        if (_workspace.IsShowMode)
+        {
+            _propertiesWindow?.Close();
+            EditorPreviewGrid.ColumnDefinitions[0].Width = new GridLength(0);
+            EditorPreviewGrid.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
+            Grid.SetColumn(NativePreviewPanel, 0);
+            Grid.SetColumnSpan(NativePreviewPanel, 2);
+        }
+        else
+        {
+            EditorPreviewGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+            EditorPreviewGrid.ColumnDefinitions[1].Width = new GridLength(300);
+            Grid.SetColumn(NativePreviewPanel, 1);
+            Grid.SetColumnSpan(NativePreviewPanel, 1);
+        }
+    }
 }

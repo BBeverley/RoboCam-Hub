@@ -31,6 +31,7 @@ internal sealed class ViewEditorCanvas : Control
     private ViewEditorViewModel? _editor;
     private readonly List<ViewEditorElementViewModel> _subscribedElements = [];
     private PointerInteraction _pointerInteraction;
+    private IPointer? _capturedPointer;
 
     private enum PointerInteraction
     {
@@ -94,7 +95,7 @@ internal sealed class ViewEditorCanvas : Control
                 DrawElement(context, viewport, element);
             }
 
-            if (Editor.SelectedElement is { IsVisibleOnCanvas: true } selected)
+            if (Editor.CanEditScene && Editor.SelectedElement is { IsVisibleOnCanvas: true } selected)
             {
                 DrawSelection(context, viewport, selected);
             }
@@ -105,7 +106,7 @@ internal sealed class ViewEditorCanvas : Control
     {
         base.OnPointerPressed(eventArgs);
         var editor = Editor;
-        if (editor is null || editor.IsApplying)
+        if (editor is null || editor.IsApplying || !editor.CanEditScene)
         {
             return;
         }
@@ -150,6 +151,7 @@ internal sealed class ViewEditorCanvas : Control
         if (_pointerInteraction != PointerInteraction.None)
         {
             eventArgs.Pointer.Capture(this);
+            _capturedPointer = eventArgs.Pointer;
         }
         InvalidateVisual();
         eventArgs.Handled = true;
@@ -191,6 +193,7 @@ internal sealed class ViewEditorCanvas : Control
 
         _pointerInteraction = PointerInteraction.None;
         eventArgs.Pointer.Capture(null);
+        _capturedPointer = null;
         await Editor.CommitInteractionAsync();
         InvalidateVisual();
         eventArgs.Handled = true;
@@ -205,6 +208,7 @@ internal sealed class ViewEditorCanvas : Control
         }
 
         _pointerInteraction = PointerInteraction.None;
+        _capturedPointer = null;
         Editor?.CancelInteraction();
         InvalidateVisual();
     }
@@ -212,7 +216,7 @@ internal sealed class ViewEditorCanvas : Control
     protected override void OnKeyDown(KeyEventArgs eventArgs)
     {
         base.OnKeyDown(eventArgs);
-        if (Editor is null || Editor.IsApplying)
+        if (Editor is null || Editor.IsApplying || !Editor.CanEditScene)
         {
             return;
         }
@@ -361,7 +365,7 @@ internal sealed class ViewEditorCanvas : Control
 
     private void OpenContextMenu()
     {
-        if (Editor?.SelectedElement is not { } selected)
+        if (Editor is not { CanEditScene: true, SelectedElement: { } selected })
         {
             return;
         }
@@ -416,7 +420,18 @@ internal sealed class ViewEditorCanvas : Control
         _subscribedElements.Clear();
     }
 
-    private void OnEditorChanged(object? sender, PropertyChangedEventArgs eventArgs) => InvalidateVisual();
+    private void OnEditorChanged(object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (eventArgs.PropertyName == nameof(ViewEditorViewModel.CanEditScene)
+            && Editor is { CanEditScene: false })
+        {
+            _pointerInteraction = PointerInteraction.None;
+            _capturedPointer?.Capture(null);
+            _capturedPointer = null;
+            Editor.CancelInteraction();
+        }
+        InvalidateVisual();
+    }
 
     private void OnElementChanged(object? sender, PropertyChangedEventArgs eventArgs) => InvalidateVisual();
 

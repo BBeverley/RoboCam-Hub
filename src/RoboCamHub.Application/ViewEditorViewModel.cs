@@ -28,6 +28,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
     private IWorkspaceRuntimeService? _runtime;
     private readonly IUiDispatcher _dispatcher;
     private readonly IReadOnlyList<CameraItemViewModel> _cameras;
+    private readonly WorkspaceCapabilities _capabilities;
     private IReadOnlyList<AssetDefinition> _assets;
     private readonly Action<ViewDefinition> _definitionApplied;
     private IReadOnlyList<ViewSceneElementDefinition> _appliedScene;
@@ -43,6 +44,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         IReadOnlyList<CameraItemViewModel> cameras,
         IWorkspaceRuntimeService runtime,
         IUiDispatcher dispatcher,
+        WorkspaceCapabilities capabilities,
         Action<ViewDefinition> definitionApplied)
     {
         ViewId = definition.Id;
@@ -50,6 +52,8 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         _cameras = cameras;
         _runtime = runtime;
         _dispatcher = dispatcher;
+        _capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
+        _capabilities.PropertyChanged += OnCapabilitiesChanged;
         _definitionApplied = definitionApplied;
         _appliedScene = [.. definition.SceneElements];
         _assets = [.. definition.Assets];
@@ -97,6 +101,8 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
     }
 
     public bool HasSelection => SelectedElement is not null;
+
+    public bool CanEditScene => _capabilities.CanEditScene;
 
     public bool HasPendingTransform => _interaction.Kind != InteractionKind.None;
 
@@ -171,12 +177,20 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     public ViewEditorElementViewModel? SelectAt(EditorPoint point)
     {
+        if (!CanEditScene)
+        {
+            return null;
+        }
         SelectedElement = HitTest(point);
         return SelectedElement;
     }
 
     public bool SelectElement(string elementId)
     {
+        if (!CanEditScene)
+        {
+            return false;
+        }
         var element = Elements.FirstOrDefault(candidate => string.Equals(candidate.Id, elementId, StringComparison.Ordinal));
         SelectedElement = element;
         return element is not null;
@@ -327,6 +341,11 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     public Task<bool> CommitInteractionAsync()
     {
+        if (!CanEditScene)
+        {
+            CancelInteraction();
+            return Task.FromResult(false);
+        }
         if (_interaction.Kind == InteractionKind.None || SelectedElement is null)
         {
             return Task.FromResult(false);
@@ -361,7 +380,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     public CameraElementPropertiesViewModel? BeginProperties()
     {
-        if (SelectedElement?.Definition is not CameraElementDefinition camera)
+        if (!CanEditScene || SelectedElement?.Definition is not CameraElementDefinition camera)
         {
             return null;
         }
@@ -374,7 +393,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     public VisualElementPropertiesViewModel? BeginVisualProperties()
     {
-        if (SelectedElement?.Definition is null or CameraElementDefinition)
+        if (!CanEditScene || SelectedElement?.Definition is null or CameraElementDefinition)
         {
             return null;
         }
@@ -588,6 +607,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _capabilities.PropertyChanged -= OnCapabilitiesChanged;
         if (_cameras is INotifyCollectionChanged observableCameras)
         {
             observableCameras.CollectionChanged -= OnCamerasChanged;
@@ -607,7 +627,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         InteractionKind kind,
         EditorResizeCorner resizeCorner)
     {
-        if (_runtime is null || IsApplying || !pointer.IsFinite || !SelectElement(elementId))
+        if (!CanEditScene || _runtime is null || IsApplying || !pointer.IsFinite || !SelectElement(elementId))
         {
             return false;
         }
@@ -631,7 +651,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         IReadOnlyList<AssetDefinition>? candidateAssets = null)
     {
         var runtime = _runtime;
-        if (runtime is null || IsApplying)
+        if (!CanEditScene || runtime is null || IsApplying)
         {
             return false;
         }
@@ -954,5 +974,21 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
     private void RaiseCommandState()
     {
         RaisePropertyChanged(nameof(HasSelection));
+        RaisePropertyChanged(nameof(CanEditScene));
+    }
+
+    private void OnCapabilitiesChanged(object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (eventArgs.PropertyName is not nameof(WorkspaceCapabilities.Mode)
+            and not nameof(WorkspaceCapabilities.CanEditScene))
+        {
+            return;
+        }
+
+        if (!CanEditScene)
+        {
+            ClearSelection();
+        }
+        RaiseCommandState();
     }
 }

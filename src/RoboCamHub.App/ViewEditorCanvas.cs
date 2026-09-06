@@ -16,6 +16,7 @@ internal sealed class ViewEditorCanvas : Control
     private const double RotationHandleOffset = 24;
     private static readonly IBrush CanvasBrush = new SolidColorBrush(Color.Parse("#070B10"));
     private static readonly IBrush GuideBrush = new SolidColorBrush(Color.Parse("#25313D"));
+    private static readonly IBrush ContainerBrush = new SolidColorBrush(Color.Parse("#607080"));
     private static readonly IBrush SelectionBrush = new SolidColorBrush(Color.Parse("#67B7FF"));
     private static readonly IBrush TextBrush = new SolidColorBrush(Color.Parse("#F3F7FA"));
     private static readonly IBrush[] ElementBrushes =
@@ -82,17 +83,20 @@ internal sealed class ViewEditorCanvas : Control
             return;
         }
 
-        foreach (var element in Editor.Elements
-                     .Where(element => element.IsVisibleOnCanvas)
-                     .OrderBy(element => element.ZOrder)
-                     .ThenBy(element => element.Id, StringComparer.Ordinal))
+        using (context.PushClip(viewport))
         {
-            DrawElement(context, viewport, element);
-        }
+            foreach (var element in Editor.Elements
+                         .Where(element => element.IsVisibleOnCanvas)
+                         .OrderBy(element => element.ZOrder)
+                         .ThenBy(element => element.Id, StringComparer.Ordinal))
+            {
+                DrawElement(context, viewport, element);
+            }
 
-        if (Editor.SelectedElement is { IsVisibleOnCanvas: true } selected)
-        {
-            DrawSelection(context, viewport, selected);
+            if (Editor.SelectedElement is { IsVisibleOnCanvas: true } selected)
+            {
+                DrawSelection(context, viewport, selected);
+            }
         }
     }
 
@@ -244,7 +248,7 @@ internal sealed class ViewEditorCanvas : Control
         Rect viewport,
         ViewEditorElementViewModel element)
     {
-        var points = GetElementCorners(viewport, element.Definition);
+        var points = GetElementCorners(viewport, element.Geometry.VisibleCorners);
         var geometry = CreatePolygon(points);
         var fill = ElementBrushes[Math.Abs(StringComparer.Ordinal.GetHashCode(element.CameraId)) % ElementBrushes.Length];
         context.DrawGeometry(fill, new Pen(new SolidColorBrush(Color.Parse("#63829A")), 1), geometry);
@@ -256,7 +260,7 @@ internal sealed class ViewEditorCanvas : Control
             new Typeface("Inter", FontStyle.Normal, FontWeight.SemiBold),
             13,
             TextBrush);
-        var centre = GetElementCentre(viewport, element.Definition);
+        var centre = ToPixel(viewport, element.Geometry.VisibleBounds.Centre);
         context.DrawText(text, new Point(centre.X - text.Width / 2, centre.Y - text.Height / 2));
     }
 
@@ -265,14 +269,24 @@ internal sealed class ViewEditorCanvas : Control
         Rect viewport,
         ViewEditorElementViewModel element)
     {
-        var corners = GetElementCorners(viewport, element.Definition);
+        var geometry = element.Geometry;
+        if (geometry.HasTransparentContainerSpace)
+        {
+            var containerPen = new Pen(ContainerBrush, 1, dashStyle: DashStyle.Dash);
+            context.DrawGeometry(
+                null,
+                containerPen,
+                CreatePolygon(GetElementCorners(viewport, geometry.DestinationCorners)));
+        }
+
+        var corners = GetElementCorners(viewport, geometry.ManipulationCorners);
         context.DrawGeometry(null, new Pen(SelectionBrush, 2), CreatePolygon(corners));
         foreach (var corner in corners)
         {
             context.DrawEllipse(SelectionBrush, new Pen(Brushes.White, 1), corner, HandleRadius, HandleRadius);
         }
 
-        var rotationHandle = GetRotationHandle(viewport, element.Definition);
+        var rotationHandle = GetRotationHandle(viewport, geometry);
         var topCentre = Midpoint(corners[0], corners[1]);
         context.DrawLine(new Pen(SelectionBrush, 1), topCentre, rotationHandle);
         context.DrawEllipse(SelectionBrush, new Pen(Brushes.White, 1), rotationHandle, HandleRadius, HandleRadius);
@@ -286,13 +300,13 @@ internal sealed class ViewEditorCanvas : Control
         }
 
         var viewport = GetViewport();
-        var rotation = GetRotationHandle(viewport, selected.Definition);
+        var rotation = GetRotationHandle(viewport, selected.Geometry);
         if (Distance(point, rotation) <= HandleRadius + 3)
         {
             return PointerInteraction.Rotate;
         }
 
-        var corners = GetElementCorners(viewport, selected.Definition);
+        var corners = GetElementCorners(viewport, selected.Geometry.ManipulationCorners);
         var kinds = new[]
         {
             PointerInteraction.ResizeTopLeft,
@@ -431,47 +445,21 @@ internal sealed class ViewEditorCanvas : Control
             (point.Y - viewport.Y) / viewport.Height);
     }
 
-    private static Point[] GetElementCorners(Rect viewport, ViewEditorElementViewModel element)
-        => GetElementCorners(viewport, element.Definition);
+    private static Point[] GetElementCorners(Rect viewport, IReadOnlyList<EditorPoint> corners)
+        => corners.Select(point => ToPixel(viewport, point)).ToArray();
 
-    private static Point[] GetElementCorners(Rect viewport, RoboCamHub.Domain.CameraElementDefinition element)
+    private static Point ToPixel(Rect viewport, EditorPoint point)
+        => new(viewport.X + point.X * viewport.Width, viewport.Y + point.Y * viewport.Height);
+
+    private static Point GetRotationHandle(Rect viewport, EditorElementGeometry geometry)
     {
-        var centre = GetElementCentre(viewport, element);
-        var halfWidth = element.Width * viewport.Width / 2;
-        var halfHeight = element.Height * viewport.Height / 2;
-        return
-        [
-            Rotate(new Point(centre.X - halfWidth, centre.Y - halfHeight), centre, element.RotationDegrees),
-            Rotate(new Point(centre.X + halfWidth, centre.Y - halfHeight), centre, element.RotationDegrees),
-            Rotate(new Point(centre.X + halfWidth, centre.Y + halfHeight), centre, element.RotationDegrees),
-            Rotate(new Point(centre.X - halfWidth, centre.Y + halfHeight), centre, element.RotationDegrees),
-        ];
-    }
-
-    private static Point GetElementCentre(Rect viewport, RoboCamHub.Domain.CameraElementDefinition element)
-        => new(
-            viewport.X + (element.X + element.Width / 2) * viewport.Width,
-            viewport.Y + (element.Y + element.Height / 2) * viewport.Height);
-
-    private static Point GetRotationHandle(Rect viewport, RoboCamHub.Domain.CameraElementDefinition element)
-    {
-        var corners = GetElementCorners(viewport, element);
+        var corners = GetElementCorners(viewport, geometry.ManipulationCorners);
         var topCentre = Midpoint(corners[0], corners[1]);
-        var centre = GetElementCentre(viewport, element);
+        var centre = ToPixel(viewport, geometry.DestinationBounds.Centre);
         var length = Math.Max(1, Distance(topCentre, centre));
         return new Point(
             topCentre.X + (topCentre.X - centre.X) / length * RotationHandleOffset,
             topCentre.Y + (topCentre.Y - centre.Y) / length * RotationHandleOffset);
-    }
-
-    private static Point Rotate(Point point, Point centre, double degrees)
-    {
-        var radians = degrees * Math.PI / 180;
-        var x = point.X - centre.X;
-        var y = point.Y - centre.Y;
-        return new Point(
-            centre.X + x * Math.Cos(radians) - y * Math.Sin(radians),
-            centre.Y + x * Math.Sin(radians) + y * Math.Cos(radians));
     }
 
     private static StreamGeometry CreatePolygon(IReadOnlyList<Point> points)

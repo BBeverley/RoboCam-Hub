@@ -1,11 +1,12 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using RoboCamHub.Domain;
 
 namespace RoboCamHub.Application;
 
 public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 {
-    private const double CanvasAspectRatio = 16d / 9d;
     public const double MinimumElementSize = 1d / 60d;
     public const double SnapTolerance = 1d / 240d;
 
@@ -21,6 +22,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         InteractionKind Kind,
         EditorPoint StartPointer,
         CameraElementDefinition StartDefinition,
+        EditorElementGeometry StartGeometry,
         EditorResizeCorner ResizeCorner);
 
     private IWorkspaceRuntimeService? _runtime;
@@ -49,6 +51,14 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         _definitionApplied = definitionApplied;
         _appliedScene = [.. definition.SceneElements];
         Elements = [];
+        foreach (var camera in _cameras)
+        {
+            camera.PropertyChanged += OnCameraPropertyChanged;
+        }
+        if (_cameras is INotifyCollectionChanged observableCameras)
+        {
+            observableCameras.CollectionChanged += OnCamerasChanged;
+        }
         RebuildElements(null);
     }
 
@@ -135,7 +145,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         }
 
         return Elements
-            .Where(element => element.IsVisibleOnCanvas && Contains(element.Definition, point))
+            .Where(element => element.IsVisibleOnCanvas && element.Geometry.ContainsVisible(point))
             .OrderByDescending(element => element.ZOrder)
             .ThenByDescending(element => element.Id, StringComparer.Ordinal)
             .FirstOrDefault();
@@ -209,58 +219,61 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         var radians = start.RotationDegrees * Math.PI / 180;
         var axisX = new EditorPoint(Math.Cos(radians), Math.Sin(radians));
         var axisY = new EditorPoint(-Math.Sin(radians), Math.Cos(radians));
-        var centreX = (start.X + start.Width / 2) * CanvasAspectRatio;
-        var centreY = start.Y + start.Height / 2;
-        var halfWidth = start.Width * CanvasAspectRatio / 2;
-        var halfHeight = start.Height / 2;
-        var oppositeX = centreX
-            - horizontalSign * halfWidth * axisX.X
-            - verticalSign * halfHeight * axisY.X;
-        var oppositeY = centreY
-            - horizontalSign * halfWidth * axisX.Y
-            - verticalSign * halfHeight * axisY.Y;
-        var deltaX = pointerX * CanvasAspectRatio - oppositeX;
-        var deltaY = pointerY - oppositeY;
-        var width = Math.Clamp(
-            Math.Abs(horizontalSign * (deltaX * axisX.X + deltaY * axisX.Y)) / CanvasAspectRatio,
-            MinimumElementSize,
-            ViewSceneElementDefinition.MaximumNormalizedMagnitude);
-        var height = Math.Clamp(
-            Math.Abs(verticalSign * (deltaX * axisY.X + deltaY * axisY.Y)),
-            MinimumElementSize,
-            ViewSceneElementDefinition.MaximumNormalizedMagnitude);
+        var pointerDeltaX = (pointerX - _interaction.StartPointer.X) * ViewEditorGeometry.CanvasAspectRatio;
+        var pointerDeltaY = pointerY - _interaction.StartPointer.Y;
+        var localDeltaX = pointerDeltaX * axisX.X + pointerDeltaY * axisX.Y;
+        var localDeltaY = pointerDeltaX * axisY.X + pointerDeltaY * axisY.Y;
+        var startVisible = _interaction.StartGeometry.VisibleBounds;
+        double width;
+        double height;
 
-        if (preserveAspectRatio)
+        if (preserveAspectRatio || start.FitMode == CameraElementFitMode.Contain)
         {
-            var aspect = start.Width / start.Height;
-            var widthFromHeight = height * aspect;
-            if (widthFromHeight > width)
-            {
-                width = widthFromHeight;
-            }
-            else
-            {
-                height = width / aspect;
-            }
-
-            var scale = Math.Min(
-                1,
-                Math.Min(
-                    ViewSceneElementDefinition.MaximumNormalizedMagnitude / width,
-                    ViewSceneElementDefinition.MaximumNormalizedMagnitude / height));
-            width *= scale;
-            height *= scale;
+            var proposedVisibleWidth = startVisible.Width * ViewEditorGeometry.CanvasAspectRatio
+                                       + horizontalSign * localDeltaX;
+            var proposedVisibleHeight = startVisible.Height + verticalSign * localDeltaY;
+            var scale = Math.Max(
+                proposedVisibleWidth / (startVisible.Width * ViewEditorGeometry.CanvasAspectRatio),
+                proposedVisibleHeight / startVisible.Height);
+            var minimumScale = Math.Max(MinimumElementSize / start.Width, MinimumElementSize / start.Height);
+            var maximumScale = Math.Min(
+                ViewSceneElementDefinition.MaximumNormalizedMagnitude / start.Width,
+                ViewSceneElementDefinition.MaximumNormalizedMagnitude / start.Height);
+            scale = Math.Clamp(scale, minimumScale, maximumScale);
+            width = start.Width * scale;
+            height = start.Height * scale;
+        }
+        else
+        {
+            var visibleWidthFraction = startVisible.Width / start.Width;
+            var visibleHeightFraction = startVisible.Height / start.Height;
+            width = Math.Clamp(
+                start.Width + horizontalSign * localDeltaX
+                / ViewEditorGeometry.CanvasAspectRatio / visibleWidthFraction,
+                MinimumElementSize,
+                ViewSceneElementDefinition.MaximumNormalizedMagnitude);
+            height = Math.Clamp(
+                start.Height + verticalSign * localDeltaY / visibleHeightFraction,
+                MinimumElementSize,
+                ViewSceneElementDefinition.MaximumNormalizedMagnitude);
         }
 
-        halfWidth = width * CanvasAspectRatio / 2;
-        halfHeight = height / 2;
-        centreX = oppositeX
-            + horizontalSign * halfWidth * axisX.X
-            + verticalSign * halfHeight * axisY.X;
-        centreY = oppositeY
-            + horizontalSign * halfWidth * axisX.Y
-            + verticalSign * halfHeight * axisY.Y;
-        var x = ClampCoordinate(centreX / CanvasAspectRatio - width / 2);
+        var sized = Copy(start, width: width, height: height);
+        var camera = FindCamera(start.CameraId);
+        var sizedGeometry = ViewEditorGeometry.Calculate(
+            sized,
+            camera?.LatestFrameWidth ?? 0,
+            camera?.LatestFrameHeight ?? 0);
+        var opposite = OppositeCorner(_interaction.StartGeometry.VisibleCorners, _interaction.ResizeCorner);
+        var visibleHalfWidth = sizedGeometry.VisibleBounds.Width * ViewEditorGeometry.CanvasAspectRatio / 2;
+        var visibleHalfHeight = sizedGeometry.VisibleBounds.Height / 2;
+        var centreX = opposite.X * ViewEditorGeometry.CanvasAspectRatio
+                      + horizontalSign * visibleHalfWidth * axisX.X
+                      + verticalSign * visibleHalfHeight * axisY.X;
+        var centreY = opposite.Y
+                      + horizontalSign * visibleHalfWidth * axisX.Y
+                      + verticalSign * visibleHalfHeight * axisY.Y;
+        var x = ClampCoordinate(centreX / ViewEditorGeometry.CanvasAspectRatio - width / 2);
         var y = ClampCoordinate(centreY - height / 2);
         SelectedElement.Definition = Copy(start, x: x, y: y, width: width, height: height);
         RaisePendingChanged();
@@ -277,10 +290,10 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         var centre = new EditorPoint(start.X + start.Width / 2, start.Y + start.Height / 2);
         var startAngle = Math.Atan2(
             _interaction.StartPointer.Y - centre.Y,
-            (_interaction.StartPointer.X - centre.X) * CanvasAspectRatio);
+            (_interaction.StartPointer.X - centre.X) * ViewEditorGeometry.CanvasAspectRatio);
         var nextAngle = Math.Atan2(
             pointer.Y - centre.Y,
-            (pointer.X - centre.X) * CanvasAspectRatio);
+            (pointer.X - centre.X) * ViewEditorGeometry.CanvasAspectRatio);
         var degrees = start.RotationDegrees + (nextAngle - startAngle) * 180 / Math.PI;
         while (degrees > 360)
         {
@@ -302,9 +315,16 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         }
 
         var selectedId = SelectedElement.Id;
-        var candidate = ReplaceElement(_appliedScene, SelectedElement.Definition);
+        var pendingDefinition = SelectedElement.Definition;
+        var isUnchanged = DefinitionsEqual(_interaction.StartDefinition, pendingDefinition);
         _interaction = default;
         RaisePendingChanged();
+        if (isUnchanged)
+        {
+            return Task.FromResult(true);
+        }
+
+        var candidate = ReplaceElement(_appliedScene, pendingDefinition);
         return ApplyCandidateAsync(candidate, selectedId, closePropertiesOnSuccess: false);
     }
 
@@ -446,6 +466,14 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        if (_cameras is INotifyCollectionChanged observableCameras)
+        {
+            observableCameras.CollectionChanged -= OnCamerasChanged;
+        }
+        foreach (var camera in _cameras)
+        {
+            camera.PropertyChanged -= OnCameraPropertyChanged;
+        }
         _runtime = null;
         ClearSelection();
         RaiseCommandState();
@@ -464,7 +492,12 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
         ActiveProperties = null;
         OperatorMessage = null;
-        _interaction = new Interaction(kind, pointer, GetAppliedElement(elementId), resizeCorner);
+        _interaction = new Interaction(
+            kind,
+            pointer,
+            GetAppliedElement(elementId),
+            SelectedElement!.Geometry,
+            resizeCorner);
         RaisePendingChanged();
         return true;
     }
@@ -543,8 +576,13 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     private (double X, double Y) SnapPosition(CameraElementDefinition element, double x, double y)
     {
-        var xOffset = FindSnapOffset([x, x + element.Width / 2, x + element.Width], false, element.Id);
-        var yOffset = FindSnapOffset([y, y + element.Height / 2, y + element.Height], true, element.Id);
+        var camera = FindCamera(element.CameraId);
+        var geometry = ViewEditorGeometry.Calculate(
+            Copy(element, x: x, y: y),
+            camera?.LatestFrameWidth ?? 0,
+            camera?.LatestFrameHeight ?? 0);
+        var xOffset = FindSnapOffset(AxisCoordinates(geometry.VisibleCorners, vertical: false), false, element.Id);
+        var yOffset = FindSnapOffset(AxisCoordinates(geometry.VisibleCorners, vertical: true), true, element.Id);
         return (x + xOffset, y + yOffset);
     }
 
@@ -564,11 +602,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
             {
                 continue;
             }
-            var start = vertical ? definition.Y : definition.X;
-            var extent = vertical ? definition.Height : definition.Width;
-            targets.Add(start);
-            targets.Add(start + extent / 2);
-            targets.Add(start + extent);
+            targets.AddRange(AxisCoordinates(element.Geometry.VisibleCorners, vertical));
         }
 
         var best = 0d;
@@ -589,16 +623,23 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         return best;
     }
 
+    private static IReadOnlyList<double> AxisCoordinates(
+        IReadOnlyList<EditorPoint> corners,
+        bool vertical)
+    {
+        var values = corners.Select(point => vertical ? point.Y : point.X).ToArray();
+        var minimum = values.Min();
+        var maximum = values.Max();
+        return [minimum, (minimum + maximum) / 2, maximum];
+    }
+
     private void RebuildElements(string? selectedId)
     {
         Elements.Clear();
         foreach (var definition in _appliedScene.OfType<CameraElementDefinition>())
         {
-            var cameraName = _cameras.FirstOrDefault(camera => string.Equals(
-                camera.Definition.Id,
-                definition.CameraId,
-                StringComparison.Ordinal))?.Name ?? definition.CameraId;
-            Elements.Add(new ViewEditorElementViewModel(definition, cameraName));
+            var camera = FindCamera(definition.CameraId);
+            Elements.Add(new ViewEditorElementViewModel(definition, camera?.Name ?? definition.CameraId, camera));
         }
         SelectedElement = selectedId is null
             ? null
@@ -620,22 +661,58 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
                 : element)
             .ToArray();
 
-    private static bool Contains(CameraElementDefinition element, EditorPoint point)
+    private CameraItemViewModel? FindCamera(string cameraId)
+        => _cameras.FirstOrDefault(camera => string.Equals(
+            camera.Definition.Id,
+            cameraId,
+            StringComparison.Ordinal));
+
+    private void OnCameraPropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
     {
-        // Rotation is defined in output-pixel space. Scale normalized X into
-        // the 16:9 canvas coordinate system before applying the inverse rotation.
-        var centreX = (element.X + element.Width / 2) * CanvasAspectRatio;
-        var centreY = element.Y + element.Height / 2;
-        var radians = -element.RotationDegrees * Math.PI / 180;
-        var deltaX = point.X * CanvasAspectRatio - centreX;
-        var deltaY = point.Y - centreY;
-        var localX = deltaX * Math.Cos(radians) - deltaY * Math.Sin(radians) + centreX;
-        var localY = deltaX * Math.Sin(radians) + deltaY * Math.Cos(radians) + centreY;
-        return localX >= element.X * CanvasAspectRatio
-            && localX <= (element.X + element.Width) * CanvasAspectRatio
-            && localY >= element.Y
-            && localY <= element.Y + element.Height;
+        if (sender is not CameraItemViewModel camera
+            || eventArgs.PropertyName is not nameof(CameraItemViewModel.LatestFrameWidth)
+                and not nameof(CameraItemViewModel.LatestFrameHeight))
+        {
+            return;
+        }
+
+        foreach (var element in Elements.Where(element => string.Equals(
+                     element.CameraId,
+                     camera.Definition.Id,
+                     StringComparison.Ordinal)))
+        {
+            element.NotifySourceGeometryChanged();
+        }
     }
+
+    private void OnCamerasChanged(object? sender, NotifyCollectionChangedEventArgs eventArgs)
+    {
+        if (eventArgs.OldItems is not null)
+        {
+            foreach (var camera in eventArgs.OldItems.OfType<CameraItemViewModel>())
+            {
+                camera.PropertyChanged -= OnCameraPropertyChanged;
+            }
+        }
+        if (eventArgs.NewItems is not null)
+        {
+            foreach (var camera in eventArgs.NewItems.OfType<CameraItemViewModel>())
+            {
+                camera.PropertyChanged += OnCameraPropertyChanged;
+            }
+        }
+    }
+
+    private static EditorPoint OppositeCorner(
+        IReadOnlyList<EditorPoint> corners,
+        EditorResizeCorner resizeCorner)
+        => resizeCorner switch
+        {
+            EditorResizeCorner.TopLeft => corners[2],
+            EditorResizeCorner.TopRight => corners[3],
+            EditorResizeCorner.BottomRight => corners[0],
+            _ => corners[1],
+        };
 
     private static CameraElementDefinition Copy(
         CameraElementDefinition source,
@@ -664,6 +741,27 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
             source.Visible,
             source.Enabled,
             source.FitMode);
+
+    private static bool DefinitionsEqual(
+        CameraElementDefinition left,
+        CameraElementDefinition right)
+        => string.Equals(left.Id, right.Id, StringComparison.Ordinal)
+           && string.Equals(left.CameraId, right.CameraId, StringComparison.Ordinal)
+           && left.X == right.X
+           && left.Y == right.Y
+           && left.Width == right.Width
+           && left.Height == right.Height
+           && left.ZOrder == right.ZOrder
+           && left.CropLeft == right.CropLeft
+           && left.CropTop == right.CropTop
+           && left.CropRight == right.CropRight
+           && left.CropBottom == right.CropBottom
+           && left.RotationDegrees == right.RotationDegrees
+           && left.FlipHorizontal == right.FlipHorizontal
+           && left.FlipVertical == right.FlipVertical
+           && left.Visible == right.Visible
+           && left.Enabled == right.Enabled
+           && left.FitMode == right.FitMode;
 
     private static double ClampCoordinate(double value)
         => Math.Clamp(

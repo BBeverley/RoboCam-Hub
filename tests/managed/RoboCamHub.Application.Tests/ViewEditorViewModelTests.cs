@@ -82,6 +82,23 @@ public sealed class ViewEditorViewModelTests
     }
 
     [Fact]
+    public async Task ClickSelectionReleaseDoesNotApplyAnUnchangedScene()
+    {
+        var (workspace, runtime) = CreateWorkspace(Element("element", "camera-1", x: 0.1, y: 0.2));
+        await using (workspace)
+        {
+            var editor = workspace.SelectedView.Editor;
+
+            Assert.True(editor.BeginMove("element", new EditorPoint(0.2, 0.3)));
+            Assert.True(await editor.CommitInteractionAsync());
+
+            Assert.Equal(0, runtime.ApplyViewSceneCallCount);
+            Assert.False(editor.HasPendingTransform);
+            Assert.Equal("element", editor.SelectedElement?.Id);
+        }
+    }
+
+    [Fact]
     public async Task FailedDragCommitRestoresPreviousAppliedTransformAndShowsError()
     {
         var (workspace, runtime) = CreateWorkspace(Element("element", "camera-1", x: 0.1, y: 0.2));
@@ -185,6 +202,25 @@ public sealed class ViewEditorViewModelTests
 
             Assert.Equal(0.4, editor.SelectedElement!.X, 8);
             Assert.Equal(1d / 240d, ViewEditorViewModel.SnapTolerance, 8);
+        }
+    }
+
+    [Fact]
+    public async Task MoveSnappingUsesRotatedVisibleBoundsOfNeighbouringElements()
+    {
+        var (workspace, _) = CreateWorkspace(
+            Element("moving", "camera-1", x: 0.2, y: 0.1, width: 0.1, height: 0.1),
+            Element("rotated", "camera-2", x: 0.4, y: 0.4, width: 0.2, height: 0.1, rotation: 90));
+        await using (workspace)
+        {
+            var editor = workspace.SelectedView.Editor;
+            editor.BeginMove("moving", new EditorPoint(0.2, 0.1));
+
+            editor.UpdateMove(new EditorPoint(0.372, 0.1));
+
+            // The moving right edge snaps to the rotated neighbour's actual
+            // visible left edge (0.471875), not its unrotated X value (0.4).
+            Assert.Equal(0.371875, editor.SelectedElement!.X, 8);
         }
     }
 

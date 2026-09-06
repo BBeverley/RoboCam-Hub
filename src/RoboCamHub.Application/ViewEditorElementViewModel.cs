@@ -5,11 +5,16 @@ namespace RoboCamHub.Application;
 public sealed class ViewEditorElementViewModel : ObservableObject
 {
     private CameraElementDefinition _definition;
+    private readonly CameraItemViewModel? _camera;
     private bool _isSelected;
 
-    internal ViewEditorElementViewModel(CameraElementDefinition definition, string cameraName)
+    internal ViewEditorElementViewModel(
+        CameraElementDefinition definition,
+        string cameraName,
+        CameraItemViewModel? camera = null)
     {
         _definition = definition;
+        _camera = camera;
         CameraName = cameraName;
     }
 
@@ -27,6 +32,7 @@ public sealed class ViewEditorElementViewModel : ObservableObject
                 RaisePropertyChanged(nameof(RotationDegrees));
                 RaisePropertyChanged(nameof(ZOrder));
                 RaisePropertyChanged(nameof(IsVisibleOnCanvas));
+                RaisePropertyChanged(nameof(Geometry));
             }
         }
     }
@@ -51,9 +57,17 @@ public sealed class ViewEditorElementViewModel : ObservableObject
 
     public bool IsVisibleOnCanvas => Definition.Visible && Definition.Enabled;
 
+    public EditorElementGeometry Geometry
+        => ViewEditorGeometry.Calculate(
+            Definition,
+            _camera?.LatestFrameWidth ?? 0,
+            _camera?.LatestFrameHeight ?? 0);
+
     public bool IsSelected
     {
         get => _isSelected;
         internal set => SetProperty(ref _isSelected, value);
     }
+
+    internal void NotifySourceGeometryChanged() => RaisePropertyChanged(nameof(Geometry));
 }

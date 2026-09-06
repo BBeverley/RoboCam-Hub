@@ -21,9 +21,13 @@ native compositor latest frame
 ```
 
 The schematic canvas draws camera names, selection, guides and handles with
-Avalonia primitives. It never reads or displays decoded pixels. The existing
-native-hosted preview remains a separate clean surface because ADR 0002 does
-not permit Avalonia content to overlay its native airspace.
+Avalonia primitives. It never reads or displays decoded pixels. It does consume
+the low-frequency negotiated source width and height already present in camera
+status so its geometry can match native crop/fit behavior. Before a source has
+reported dimensions, the schematic uses a 16:9 placeholder; there is no native
+image to compare before the first frame. The existing native-hosted preview
+remains a separate clean surface because ADR 0002 does not permit Avalonia
+content to overlay its native airspace.
 
 ## Editor state
 
@@ -50,24 +54,59 @@ Hit testing uses the Gate 6A scene order rather than Avalonia child order:
 3. equal Z-order uses descending ordinal element ID because the native renderer
    draws ascending IDs and the later element is topmost;
 4. arbitrary rotation is handled by inverse-transforming the pointer into the
-   element's local rectangle.
+   element's final visible local rectangle.
 
 Selection is editor-only state. It cannot change camera ownership, preview
 lifecycle, compositor ownership or NDI routing. The selected element gets a
-blue outline, four corner resize handles and a rotation handle. Right-click
-offers Properties, Locate Source, Duplicate, Bring Forward, Send Backward and
-Delete. Locate Source marks the matching camera in the external source rail.
+blue primary outline, four corner resize handles and a rotation handle around
+the actual visible source image. Right-click offers Properties, Locate Source,
+Duplicate, Bring Forward, Send Backward and Delete. Locate Source marks the
+matching camera in the external source rail.
+
+### Destination and visible geometry
+
+Gate 6A's `X`, `Y`, `Width` and `Height` remain the destination rectangle. The
+editor derives a separate visible rectangle with the same deterministic order
+as the native compositor:
+
+```text
+negotiated source dimensions
+→ fractional crop
+→ Stretch / Contain / Cover
+→ rotation around destination centre
+→ output-canvas clipping
+```
+
+- Stretch maps the cropped source across the complete destination, so visible
+  and destination bounds are identical.
+- Contain preserves the cropped source aspect ratio. Its primary outline,
+  hit-test area and handles surround only the fitted visible image. Transparent
+  letterbox space is not selectable as that element. When selected, the full
+  destination remains visible as a subtle dashed container outline so the
+  letterbox space is explicit rather than an unexplained invisible box.
+- Cover centre-crops additional source content and fills the complete
+  destination, so visible and destination bounds are identical.
+- Horizontal and vertical flips change sampling direction, not geometry.
+- Rotation is applied to the final fitted visible rectangle about the common
+  destination/visible centre, exactly as in the native compositor.
+- Elements may extend beyond the output canvas. Their scene-space geometry is
+  retained, while schematic fill, selection chrome and hit testing are clipped
+  to the same 16:9 canvas boundary as clean output.
 
 ## Editing behavior
 
 - Drag moves an element; corner handles resize it.
 - Resize preserves the starting aspect ratio by default. Holding Shift unlocks
-  the ratio.
+  the destination ratio for Stretch and Cover. Contain's primary visible image
+  necessarily retains the cropped source aspect; exact outer destination
+  dimensions, including letterbox space, remain editable in Properties.
 - The minimum normalized width and height are `1/60` (32 horizontal pixels or
   18 vertical pixels on the fixed 1920×1080 Gate 6 canvas), keeping small
   elements and handles practical.
 - The rotation handle uses Gate 6A clockwise arbitrary rotation. The properties
   sheet also accepts an exact angle.
+- Resize handles use the visible fitted bounds and update only destination
+  `X`/`Y`/`Width`/`Height`; crop values never feed back from a canvas resize.
 - Arrow keys nudge by one displayed editor pixel; Shift+arrow nudges by ten.
 - Command/Ctrl+D duplicates and Delete/Backspace deletes the selection.
 - Duplicate creates a new GUID-based stable element ID, retains the logical
@@ -132,6 +171,25 @@ and rotation gestures; native scene state changed only on release. A coarse
 end-to-end property Apply measurement, including macOS accessibility polling
 overhead, completed in approximately 1.03 seconds, so it is an upper-bound UI
 observation rather than a native compositor benchmark.
+
+### Crop/fit geometry correction validation
+
+The selection geometry follow-up was manually compared on the same macOS
+14.7.1 x86_64 system using one live local RTSP/H.264 960×540p60 source, the
+native preview and NDI Video Monitor 5.2. With 25% cropped from both horizontal
+source edges:
+
+- Stretch filled the full primary editor outline in the native preview and NDI;
+- Contain showed a narrow primary editor outline around only visible content,
+  with the wider destination retained as a subtle dashed container; preview and
+  NDI showed the same narrow content geometry;
+- Cover filled the full primary editor outline in preview and NDI while applying
+  the compositor's additional centre crop.
+
+The source remained one RTSP session/one decoder, preview remained near 30 fps,
+and NDI continued during each atomic fit-mode change. The application closed
+normally and the RTSP reader session was torn down. This was an editor-only
+correction: ABI 1.9 and native crop/fit/compositor code were unchanged.
 
 ## Current limitations
 

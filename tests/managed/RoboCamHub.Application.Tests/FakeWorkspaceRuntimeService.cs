@@ -49,6 +49,8 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public Dictionary<string, CameraRuntimeState> CameraStates { get; } = new(StringComparer.Ordinal);
 
+    public Dictionary<string, (uint Width, uint Height)> CameraFrameSizes { get; } = new(StringComparer.Ordinal);
+
     public Dictionary<string, OutputRuntimeStatus> OutputStatuses { get; } = new(StringComparer.Ordinal);
 
     public OutputRuntimeStatus? OutputStatus
@@ -276,8 +278,17 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         QueryCallCount++;
         var cameraStatuses = _cameras.ToDictionary(
             definition => definition.Id,
-            definition => RuntimeObservation<CameraRuntimeStatus>.Success(
-                CreateCameraStatus(CameraStates.GetValueOrDefault(definition.Id, CameraRuntimeState.Stopped))),
+            definition =>
+            {
+                var frameSize = CameraFrameSizes.GetValueOrDefault(
+                    definition.Id,
+                    (Width: 1280U, Height: 720U));
+                return RuntimeObservation<CameraRuntimeStatus>.Success(
+                    CreateCameraStatus(
+                        CameraStates.GetValueOrDefault(definition.Id, CameraRuntimeState.Stopped),
+                        frameSize.Width,
+                        frameSize.Height));
+            },
             StringComparer.Ordinal);
         var viewStatuses = new Dictionary<string, RuntimeObservation<ViewRuntimeStatus>>(StringComparer.Ordinal);
         var sourceStatuses = new Dictionary<string, IReadOnlyDictionary<uint, RuntimeObservation<ViewSourceRuntimeStatus>>>(StringComparer.Ordinal);
@@ -368,15 +379,18 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         }
     }
 
-    public static CameraRuntimeStatus CreateCameraStatus(CameraRuntimeState state)
+    public static CameraRuntimeStatus CreateCameraStatus(
+        CameraRuntimeState state,
+        uint latestFrameWidth = 1280,
+        uint latestFrameHeight = 720)
         => new(
             state,
             "Ok",
             state == CameraRuntimeState.Receiving ? 1U : 0U,
             state == CameraRuntimeState.Receiving ? 1U : 0U,
             state == CameraRuntimeState.Receiving,
-            1280,
-            720,
+            latestFrameWidth,
+            latestFrameHeight,
             10,
             9,
             5,

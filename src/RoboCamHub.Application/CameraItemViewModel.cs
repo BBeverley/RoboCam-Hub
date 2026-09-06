@@ -10,6 +10,8 @@ public sealed class CameraItemViewModel : ObservableObject, IDisposable
     private CameraRuntimeState _state = CameraRuntimeState.Stopped;
     private uint _activeRtspSessionCount;
     private uint _activeDecoderCount;
+    private uint _latestFrameWidth;
+    private uint _latestFrameHeight;
     private bool _isBusy;
     private bool _isLocatedInEditor;
     private string? _operatorMessage;
@@ -87,6 +89,18 @@ public sealed class CameraItemViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _activeDecoderCount, value);
     }
 
+    public uint LatestFrameWidth
+    {
+        get => _latestFrameWidth;
+        private set => SetProperty(ref _latestFrameWidth, value);
+    }
+
+    public uint LatestFrameHeight
+    {
+        get => _latestFrameHeight;
+        private set => SetProperty(ref _latestFrameHeight, value);
+    }
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -143,6 +157,8 @@ public sealed class CameraItemViewModel : ObservableObject, IDisposable
         State = observation.Value!.Value.State;
         ActiveRtspSessionCount = observation.Value.Value.ActiveRtspSessionCount;
         ActiveDecoderCount = observation.Value.Value.ActiveDecoderCount;
+        LatestFrameWidth = observation.Value.Value.LatestFrameWidth;
+        LatestFrameHeight = observation.Value.Value.LatestFrameHeight;
         OperatorMessage = null;
     }
 

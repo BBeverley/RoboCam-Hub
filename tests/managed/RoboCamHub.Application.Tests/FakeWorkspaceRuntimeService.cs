@@ -73,6 +73,8 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public Exception? SwitchPreviewException { get; set; }
 
+    public Exception? ApplyViewSceneException { get; set; }
+
     public Func<Task>? StartCameraHandler { get; set; }
 
     public Func<Task>? StartOutputHandler { get; set; }
@@ -81,11 +83,17 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public Func<Task>? BindHandler { get; set; }
 
+    public Func<string, IReadOnlyList<ViewSceneElementDefinition>, Task>? ApplyViewSceneHandler { get; set; }
+
     public int StartCameraCallCount { get; private set; }
 
     public int QueryCallCount { get; private set; }
 
     public int PreviewSwitchCount { get; private set; }
+
+    public int ApplyViewSceneCallCount { get; private set; }
+
+    public IReadOnlyList<ViewSceneElementDefinition>? LastAppliedScene { get; private set; }
 
     public Dictionary<string, int> StartOutputCallCounts { get; } = new(StringComparer.Ordinal);
 
@@ -132,11 +140,20 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         return Task.CompletedTask;
     }
 
-    public Task ApplyViewSceneAsync(
+    public async Task ApplyViewSceneAsync(
         string viewId,
         IReadOnlyList<ViewSceneElementDefinition> elements,
         CancellationToken cancellationToken = default)
     {
+        ApplyViewSceneCallCount++;
+        if (ApplyViewSceneException is not null)
+        {
+            throw ApplyViewSceneException;
+        }
+        if (ApplyViewSceneHandler is not null)
+        {
+            await ApplyViewSceneHandler(viewId, elements);
+        }
         var index = _views.FindIndex(view => view.Id == viewId);
         if (index < 0)
         {
@@ -148,7 +165,7 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         }
         var current = _views[index];
         _views[index] = new ViewDefinition(current.Id, current.Name, elements);
-        return Task.CompletedTask;
+        LastAppliedScene = [.. elements];
     }
 
     public async Task BindCameraSourceAsync(

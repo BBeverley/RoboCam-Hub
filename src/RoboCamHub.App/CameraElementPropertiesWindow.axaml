@@ -1,0 +1,88 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:RoboCamHub.Application;assembly=RoboCamHub.Application"
+        x:Class="RoboCamHub.App.CameraElementPropertiesWindow"
+        x:DataType="vm:ViewEditorViewModel"
+        Width="620"
+        Height="610"
+        CanResize="False"
+        Background="#111820"
+        Title="Camera element properties">
+    <Grid RowDefinitions="Auto,*,Auto" Margin="20" RowSpacing="16">
+        <StackPanel Grid.Row="0" Spacing="3">
+            <TextBlock FontSize="20" FontWeight="SemiBold" Text="Camera element properties" />
+            <TextBlock Foreground="#AAB7C4" Text="Values use the normalized 1920×1080 View coordinate space." />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1">
+            <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="18" RowSpacing="12">
+                <StackPanel Grid.Row="0" Grid.Column="0" Spacing="4">
+                    <TextBlock Text="X" />
+                    <NumericUpDown Value="{Binding ActiveProperties.X, Mode=TwoWay}" Minimum="-16" Maximum="16" Increment="0.001" FormatString="0.###" />
+                </StackPanel>
+                <StackPanel Grid.Row="0" Grid.Column="1" Spacing="4">
+                    <TextBlock Text="Y" />
+                    <NumericUpDown Value="{Binding ActiveProperties.Y, Mode=TwoWay}" Minimum="-16" Maximum="16" Increment="0.001" FormatString="0.###" />
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="0" Spacing="4">
+                    <TextBlock Text="Width" />
+                    <NumericUpDown Value="{Binding ActiveProperties.Width, Mode=TwoWay}" Minimum="0.016667" Maximum="16" Increment="0.001" FormatString="0.###" />
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                    <TextBlock Text="Height" />
+                    <NumericUpDown Value="{Binding ActiveProperties.Height, Mode=TwoWay}" Minimum="0.016667" Maximum="16" Increment="0.001" FormatString="0.###" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="2" Grid.Column="0" Spacing="4">
+                    <TextBlock Text="Crop left" />
+                    <NumericUpDown Value="{Binding ActiveProperties.CropLeft, Mode=TwoWay}" Minimum="0" Maximum="0.999" Increment="0.01" FormatString="0.###" />
+                </StackPanel>
+                <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4">
+                    <TextBlock Text="Crop top" />
+                    <NumericUpDown Value="{Binding ActiveProperties.CropTop, Mode=TwoWay}" Minimum="0" Maximum="0.999" Increment="0.01" FormatString="0.###" />
+                </StackPanel>
+                <StackPanel Grid.Row="3" Grid.Column="0" Spacing="4">
+                    <TextBlock Text="Crop right" />
+                    <NumericUpDown Value="{Binding ActiveProperties.CropRight, Mode=TwoWay}" Minimum="0" Maximum="0.999" Increment="0.01" FormatString="0.###" />
+                </StackPanel>
+                <StackPanel Grid.Row="3" Grid.Column="1" Spacing="4">
+                    <TextBlock Text="Crop bottom" />
+                    <NumericUpDown Value="{Binding ActiveProperties.CropBottom, Mode=TwoWay}" Minimum="0" Maximum="0.999" Increment="0.01" FormatString="0.###" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="4" Grid.Column="0" Spacing="4">
+                    <TextBlock Text="Rotation (degrees)" />
+                    <NumericUpDown Value="{Binding ActiveProperties.RotationDegrees, Mode=TwoWay}" Minimum="-360" Maximum="360" Increment="1" FormatString="0.##" />
+                </StackPanel>
+                <StackPanel Grid.Row="4" Grid.Column="1" Spacing="4">
+                    <TextBlock Text="Z-order" />
+                    <NumericUpDown Value="{Binding ActiveProperties.ZOrder, Mode=TwoWay}" Minimum="-1000000" Maximum="1000000" Increment="1" FormatString="0" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="5" Grid.ColumnSpan="2" Spacing="4">
+                    <TextBlock Text="Fit mode" />
+                    <ComboBox ItemsSource="{Binding ActiveProperties.FitModes}"
+                              SelectedItem="{Binding ActiveProperties.FitMode, Mode=TwoWay}" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="20">
+                    <CheckBox Content="Flip horizontal" IsChecked="{Binding ActiveProperties.FlipHorizontal, Mode=TwoWay}" />
+                    <CheckBox Content="Flip vertical" IsChecked="{Binding ActiveProperties.FlipVertical, Mode=TwoWay}" />
+                    <CheckBox Content="Visible" IsChecked="{Binding ActiveProperties.Visible, Mode=TwoWay}" />
+                </StackPanel>
+
+                <TextBlock Grid.Row="7"
+                           Grid.ColumnSpan="2"
+                           Foreground="#F6A0A0"
+                           IsVisible="{Binding HasOperatorMessage}"
+                           Text="{Binding OperatorMessage}"
+                           TextWrapping="Wrap" />
+            </Grid>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="10">
+            <Button x:Name="CancelButton" Padding="18,8" Content="Cancel" Click="OnCancel" />
+            <Button x:Name="ApplyButton" Padding="18,8" Content="Apply" Click="OnApply" />
+        </StackPanel>
+    </Grid>
+</Window>

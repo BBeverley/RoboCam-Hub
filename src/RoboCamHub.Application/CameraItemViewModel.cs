@@ -11,6 +11,7 @@ public sealed class CameraItemViewModel : ObservableObject, IDisposable
     private uint _activeRtspSessionCount;
     private uint _activeDecoderCount;
     private bool _isBusy;
+    private bool _isLocatedInEditor;
     private string? _operatorMessage;
 
     public CameraItemViewModel(
@@ -96,6 +97,12 @@ public sealed class CameraItemViewModel : ObservableObject, IDisposable
                 RaiseCommandState();
             }
         }
+    }
+
+    public bool IsLocatedInEditor
+    {
+        get => _isLocatedInEditor;
+        internal set => SetProperty(ref _isLocatedInEditor, value);
     }
 
     public string? OperatorMessage

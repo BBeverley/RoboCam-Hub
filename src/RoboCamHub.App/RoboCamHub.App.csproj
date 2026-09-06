@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <AssemblyName>RoboCam-Hub</AssemblyName>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -8,6 +9,7 @@
     <NativeSourceDirectory>$(MSBuildProjectDirectory)/../../native</NativeSourceDirectory>
     <NativeBuildDirectory>$(BaseIntermediateOutputPath)native/$(Configuration)</NativeBuildDirectory>
     <NativeConfigureArguments>-DBUILD_TESTING=OFF -DRCH_BUILD_INGEST_PROBE=OFF -DRCH_BUILD_NDI_PROBE=OFF</NativeConfigureArguments>
+    <NativeConfigureArguments Condition="'$(RchPackageWithoutNdi)' == 'true'">$(NativeConfigureArguments) -DRCH_ENABLE_NDI_SDK=OFF</NativeConfigureArguments>
     <NativeConfigureArguments Condition="'$(OS)' != 'Windows_NT'">$(NativeConfigureArguments) -DCMAKE_BUILD_TYPE=$(Configuration)</NativeConfigureArguments>
   </PropertyGroup>
 
@@ -43,6 +45,20 @@
            Text="The native RoboCam Hub library was not produced for the application." />
     <Copy SourceFiles="@(_AppNativeLibrary)"
           DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="StageNativeLibraryForPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_PublishedNativeLibrary Include="$(NativeBuildDirectory)/**/robocamhub_native.dll" />
+      <_PublishedNativeLibrary Include="$(NativeBuildDirectory)/**/librobocamhub_native.dylib" />
+      <_PublishedNativeLibrary Include="$(NativeBuildDirectory)/**/librobocamhub_native.so" />
+    </ItemGroup>
+
+    <Error Condition="'@(_PublishedNativeLibrary)' == ''"
+           Text="The native RoboCam Hub library was not available for publish." />
+    <Copy SourceFiles="@(_PublishedNativeLibrary)"
+          DestinationFolder="$(PublishDir)"
           SkipUnchangedFiles="true" />
   </Target>
 </Project>

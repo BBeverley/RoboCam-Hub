@@ -24,6 +24,8 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
     private string _selectedViewId;
     private int _disposed;
 
+    public event EventHandler? DurableConfigurationChanged;
+
     private WorkspaceRuntimeService(
         ShowRuntime showRuntime,
         ViewDefinition initialView,
@@ -33,6 +35,24 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
         _selectedViewId = initialView.Id;
         _viewDefinitions.Add(initialView);
         _viewRuntimes.Add(initialView.Id, initialViewRuntime);
+    }
+
+    private WorkspaceRuntimeService(ShowRuntime showRuntime, ShowDefinition show)
+    {
+        _showRuntime = showRuntime;
+        _selectedViewId = show.SelectedViewId;
+        _cameraDefinitions.AddRange(show.Cameras);
+        _viewDefinitions.AddRange(show.Views);
+        foreach (var view in show.Views)
+        {
+            _viewRuntimes.Add(view.Id, showRuntime.GetView(view.Id));
+        }
+        foreach (var output in show.Outputs)
+        {
+            _outputs.Add(
+                output.Id,
+                new OutputEntry(output, showRuntime.GetOutput(output.Id), new SemaphoreSlim(1, 1)));
+        }
     }
 
     public IReadOnlyList<CameraDefinition> CameraDefinitions
@@ -99,6 +119,58 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
             },
             cancellationToken);
 
+    public static Task<WorkspaceRuntimeService> CreateAsync(
+        ShowDefinition show,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(show);
+        return Task.Run(
+            () =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var runtime = ShowRuntime.CreateConfigured(show, startEnabled: false);
+                try
+                {
+                    return new WorkspaceRuntimeService(runtime, show);
+                }
+                catch
+                {
+                    runtime.Dispose();
+                    throw;
+                }
+            },
+            cancellationToken);
+    }
+
+    public Task StartConfiguredAsync(CancellationToken cancellationToken = default)
+        => RunAsync(
+            showRuntime =>
+            {
+                foreach (var camera in showRuntime.Cameras.Where(camera => camera.Definition.Enabled))
+                {
+                    try
+                    {
+                        camera.Start();
+                    }
+                    catch (Exception exception)
+                    {
+                        Trace.TraceError("Starting loaded camera '{0}' failed: {1}", camera.Definition.Id, exception);
+                    }
+                }
+                foreach (var output in showRuntime.Outputs.Where(output => output.Definition.Enabled))
+                {
+                    try
+                    {
+                        output.Start();
+                    }
+                    catch (Exception exception)
+                    {
+                        Trace.TraceError("Starting loaded Output '{0}' failed: {1}", output.Definition.Id, exception);
+                    }
+                }
+            },
+            cancellationToken);
+
     public Task AddCameraAsync(CameraDefinition definition, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(definition);
@@ -110,6 +182,7 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
                 {
                     _cameraDefinitions.Add(definition);
                 }
+                OnDurableConfigurationChanged();
             },
             cancellationToken);
     }
@@ -132,6 +205,7 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
                     _viewRuntimes.Add(definition.Id, runtime);
                     _viewDefinitions.Add(definition);
                 }
+                OnDurableConfigurationChanged();
             },
             cancellationToken);
     }
@@ -164,6 +238,7 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
                     }
                     _viewDefinitions[index] = updatedDefinition;
                 }
+                OnDurableConfigurationChanged();
             },
             cancellationToken);
     }
@@ -174,7 +249,11 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
         string cameraId,
         CancellationToken cancellationToken = default)
         => RunAsync(
-            _ => GetViewRuntime(viewId).BindCameraSource(slotIndex, cameraId),
+            _ =>
+            {
+                GetViewRuntime(viewId).BindCameraSource(slotIndex, cameraId);
+                OnDurableConfigurationChanged();
+            },
             cancellationToken);
 
     public Task UnbindSourceAsync(
@@ -182,7 +261,11 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
         uint slotIndex,
         CancellationToken cancellationToken = default)
         => RunAsync(
-            _ => GetViewRuntime(viewId).UnbindSource(slotIndex),
+            _ =>
+            {
+                GetViewRuntime(viewId).UnbindSource(slotIndex);
+                OnDurableConfigurationChanged();
+            },
             cancellationToken);
 
     public Task AddOutputAsync(OutputDefinition definition, CancellationToken cancellationToken = default)
@@ -198,6 +281,7 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
                         definition.Id,
                         new OutputEntry(definition, runtime, new SemaphoreSlim(1, 1)));
                 }
+                OnDurableConfigurationChanged();
             },
             cancellationToken);
     }
@@ -467,4 +551,7 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
 
     private void ThrowIfDisposed()
         => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+    private void OnDurableConfigurationChanged()
+        => DurableConfigurationChanged?.Invoke(this, EventArgs.Empty);
 }

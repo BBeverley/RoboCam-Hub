@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using RoboCamHub.Domain;
 using RoboCamHub.NativeInterop;
 
@@ -30,10 +31,73 @@ public sealed class ShowRuntime : IDisposable
     public static ShowRuntime Create()
         => Create(new NativeRuntimeFactory());
 
+    public static ShowRuntime Create(ShowDefinition definition)
+        => Create(definition, new NativeRuntimeFactory(), startEnabled: true);
+
+    public static ShowRuntime CreateConfigured(ShowDefinition definition, bool startEnabled)
+        => Create(definition, new NativeRuntimeFactory(), startEnabled);
+
     internal static ShowRuntime Create(INativeRuntimeFactory factory)
     {
         ArgumentNullException.ThrowIfNull(factory);
         return new ShowRuntime(factory.CreateEngine());
+    }
+
+    internal static ShowRuntime Create(
+        ShowDefinition definition,
+        INativeRuntimeFactory factory,
+        bool startEnabled = true)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        var runtime = Create(factory);
+        try
+        {
+            foreach (var camera in definition.Cameras)
+            {
+                runtime.AddCamera(camera);
+            }
+            foreach (var view in definition.Views)
+            {
+                runtime.AddView(view);
+            }
+            foreach (var output in definition.Outputs)
+            {
+                runtime.AddOutput(output);
+            }
+
+            if (startEnabled)
+            {
+                // Persistent intent is acted on only after the complete graph exists.
+                foreach (var camera in runtime.Cameras.Where(camera => camera.Definition.Enabled))
+                {
+                    try
+                    {
+                        camera.Start();
+                    }
+                    catch (Exception exception)
+                    {
+                        Trace.TraceError("Starting loaded camera '{0}' failed: {1}", camera.Definition.Id, exception);
+                    }
+                }
+                foreach (var output in runtime.Outputs.Where(output => output.Definition.Enabled))
+                {
+                    try
+                    {
+                        output.Start();
+                    }
+                    catch (Exception exception)
+                    {
+                        Trace.TraceError("Starting loaded Output '{0}' failed: {1}", output.Definition.Id, exception);
+                    }
+                }
+            }
+            return runtime;
+        }
+        catch
+        {
+            runtime.Dispose();
+            throw;
+        }
     }
 
     public CameraRuntime AddCamera(CameraDefinition definition)

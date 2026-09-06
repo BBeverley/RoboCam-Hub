@@ -1,0 +1,23 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="RoboCamHub.App.RecoveryPromptWindow"
+        Width="540"
+        Height="250"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="Recover unsaved changes">
+    <Grid RowDefinitions="*,Auto" Margin="24" RowSpacing="20">
+        <StackPanel Spacing="10">
+            <TextBlock FontSize="20" FontWeight="SemiBold" Text="Recover unsaved changes?" />
+            <TextBlock x:Name="MessageText" TextWrapping="Wrap" />
+            <TextBlock Foreground="#AAB7C4"
+                       TextWrapping="Wrap"
+                       Text="Recovery never overwrites the main show. The recovered workspace remains dirty until you Save." />
+        </StackPanel>
+        <StackPanel Grid.Row="1" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="10">
+            <Button Content="Later" Click="OnLater" />
+            <Button Content="Discard" Click="OnDiscard" />
+            <Button Content="Recover" Click="OnRecover" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -393,3 +393,12 @@ Migration should:
 - Templates are independent of Shows.
 - Every Show always opens in Edit Mode.
 - Show Mode is never restored automatically and the user is not prompted about this on load.
+
+## Gate 6F implementation
+
+Gate 6F implements the first production show-file contract. See
+[`33-gate-6f-rchshow-persistence-recovery.md`](33-gate-6f-rchshow-persistence-recovery.md)
+for the operator behavior, security ceilings, validation policy, and known
+limitations, and
+[`ADR 0004`](adr/0004-rchshow-container-and-recovery.md) for the durable archive,
+asset, transactional-load, and recovery decisions.

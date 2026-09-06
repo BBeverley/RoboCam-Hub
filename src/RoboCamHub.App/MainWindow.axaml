@@ -14,7 +14,7 @@
         MinWidth="1120"
         MinHeight="700"
         Background="#111820"
-        Title="RoboCam-Hub — Edit Mode">
+        Title="RoboCam-Hub — Untitled Show — Edit Mode">
 
     <Window.Resources>
         <DataTemplate x:Key="SlotTemplate" x:DataType="vm:ViewSlotViewModel">
@@ -102,12 +102,22 @@
                     BorderBrush="#2C3A48"
                     BorderThickness="0,0,0,1"
                     Padding="22,0">
-                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
-                    <StackPanel VerticalAlignment="Center" Spacing="2">
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="14">
+                    <Menu Grid.Column="0" VerticalAlignment="Center" Background="Transparent">
+                        <MenuItem Header="_File">
+                            <MenuItem Header="_New" InputGesture="Ctrl+N" Click="OnNewShow" />
+                            <MenuItem Header="_Open…" InputGesture="Ctrl+O" Click="OnOpenShow" />
+                            <MenuItem x:Name="RecentMenu" Header="_Recent" IsEnabled="False" />
+                            <Separator />
+                            <MenuItem Header="_Save" InputGesture="Ctrl+S" Click="OnSaveShow" />
+                            <MenuItem Header="Save _As…" InputGesture="Ctrl+Shift+S" Click="OnSaveShowAs" />
+                        </MenuItem>
+                    </Menu>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                         <TextBlock FontSize="22" FontWeight="SemiBold" Text="{Binding ApplicationTitle}" />
-                        <TextBlock Classes="secondary" Text="Operator-safe live workspace · Gate 6E" />
+                        <TextBlock FontWeight="SemiBold" Text="{Binding ShowFileDisplayName}" />
                     </StackPanel>
-                    <StackPanel Grid.Column="1"
+                    <StackPanel Grid.Column="2"
                                 VerticalAlignment="Center"
                                 Orientation="Horizontal"
                                 Spacing="6">
@@ -118,7 +128,7 @@
                                 Command="{Binding EnterShowModeCommand}"
                                 Content="SHOW MODE" />
                     </StackPanel>
-                    <Border Grid.Column="2"
+                    <Border Grid.Column="3"
                             VerticalAlignment="Center"
                             Background="{Binding ModeBackgroundColor}"
                             CornerRadius="5"

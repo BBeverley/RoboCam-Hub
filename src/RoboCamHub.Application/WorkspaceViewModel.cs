@@ -23,17 +23,35 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     private CameraItemViewModel? _locatedCamera;
     private string? _workspaceMessage;
     private bool _isFullscreen;
+    private string _showId;
+    private string _showName;
+    private string? _currentFilePath;
+    private bool _isDirty;
+    private DateTimeOffset _lastNormalSaveUtc;
     private int _disposed;
+
+    public event EventHandler? DurableEditCommitted;
 
     public WorkspaceViewModel(
         IWorkspaceRuntimeService runtime,
         IUiDispatcher? dispatcher = null,
-        TimeSpan? pollingInterval = null)
+        TimeSpan? pollingInterval = null,
+        ShowDefinition? show = null,
+        string? currentFilePath = null,
+        bool recovered = false)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatcher = dispatcher ?? new ImmediateUiDispatcher();
+        _showId = show?.Id ?? $"show-{Guid.NewGuid():N}";
+        _showName = show?.Name ?? "Untitled Show";
+        _currentFilePath = currentFilePath is null ? null : Path.GetFullPath(currentFilePath);
+        _isDirty = recovered;
+        _lastNormalSaveUtc = _currentFilePath is not null && File.Exists(_currentFilePath)
+            ? File.GetLastWriteTimeUtc(_currentFilePath)
+            : DateTimeOffset.MinValue;
         Capabilities = new WorkspaceCapabilities();
         Capabilities.PropertyChanged += OnCapabilitiesChanged;
+        runtime.DurableConfigurationChanged += OnDurableConfigurationChanged;
         Cameras = new ObservableCollection<CameraItemViewModel>(
             runtime.CameraDefinitions.Select(
                 definition => new CameraItemViewModel(definition, runtime, _dispatcher)));
@@ -65,6 +83,47 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     }
 
     public string ApplicationTitle => "RoboCam-Hub";
+
+    public string ShowId => _showId;
+
+    public string ShowName
+    {
+        get => _showName;
+        private set => SetProperty(ref _showName, value);
+    }
+
+    public string? CurrentFilePath
+    {
+        get => _currentFilePath;
+        private set
+        {
+            if (SetProperty(ref _currentFilePath, value))
+            {
+                RaisePropertyChanged(nameof(ShowFileDisplayName));
+                RaisePropertyChanged(nameof(WindowTitle));
+            }
+        }
+    }
+
+    public bool IsDirty
+    {
+        get => _isDirty;
+        private set
+        {
+            if (SetProperty(ref _isDirty, value))
+            {
+                RaisePropertyChanged(nameof(ShowFileDisplayName));
+                RaisePropertyChanged(nameof(WindowTitle));
+            }
+        }
+    }
+
+    public DateTimeOffset LastNormalSaveUtc => _lastNormalSaveUtc;
+
+    public string ShowFileDisplayName
+        => $"{(CurrentFilePath is null ? ShowName : Path.GetFileName(CurrentFilePath))}{(IsDirty ? " *" : string.Empty)}";
+
+    public string WindowTitle => $"RoboCam-Hub — {ShowFileDisplayName} — {(IsShowMode ? "Show Mode" : "Edit Mode")}";
 
     public WorkspaceCapabilities Capabilities { get; }
 
@@ -341,6 +400,9 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
 
     public void StartStatusPolling() => _polling.Start();
 
+    public Task StartConfiguredRuntimeAsync(CancellationToken cancellationToken = default)
+        => _runtime?.StartConfiguredAsync(cancellationToken) ?? Task.CompletedTask;
+
     public void LocateCamera(string cameraId)
     {
         foreach (var camera in Cameras)
@@ -352,6 +414,58 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
 
     internal Task RefreshNowAsync(CancellationToken cancellationToken = default)
         => RefreshStatusAsync(cancellationToken);
+
+    public async Task<ShowDefinition> CaptureShowAsync()
+    {
+        ShowDefinition? captured = null;
+        await _dispatcher.InvokeAsync(() =>
+        {
+            var views = Views.Select(view => view.Definition.IsLegacyFourSlotLayout
+                ? new ViewDefinition(
+                    view.Definition.Id,
+                    view.Definition.Name,
+                    view.Slots[0].AssignedCameraId,
+                    view.Slots[1].AssignedCameraId,
+                    view.Slots[2].AssignedCameraId,
+                    view.Slots[3].AssignedCameraId)
+                : view.Definition).ToArray();
+            // Local preview selection is operational state in schema v1. A saved show
+            // therefore opens on its first View deterministically.
+            captured = new ShowDefinition(
+                ShowId,
+                ShowName,
+                Cameras.Select(camera => camera.Definition),
+                views,
+                Outputs.Select(output => output.Definition),
+                views[0].Id);
+        }).ConfigureAwait(false);
+        return captured!;
+    }
+
+    public Task MarkSavedAsync(string path)
+        => _dispatcher.InvokeAsync(() =>
+        {
+            CurrentFilePath = Path.GetFullPath(path);
+            _lastNormalSaveUtc = DateTimeOffset.UtcNow;
+            RaisePropertyChanged(nameof(LastNormalSaveUtc));
+            IsDirty = false;
+            WorkspaceMessage = $"Saved {Path.GetFileName(CurrentFilePath)}";
+        });
+
+    public Task MarkRecoveredAsync(string? sourcePath)
+        => _dispatcher.InvokeAsync(() =>
+        {
+            CurrentFilePath = sourcePath is null ? null : Path.GetFullPath(sourcePath);
+            IsDirty = true;
+            WorkspaceMessage = "Recovered unsaved changes. Save to update the main show file.";
+        });
+
+    public Task ReportPersistenceErrorAsync(string action, Exception exception)
+        => _dispatcher.InvokeAsync(
+            () => WorkspaceMessage = OperatorError.ForAction("Show file", action, exception));
+
+    public Task ReportPersistenceWarningAsync(string message)
+        => _dispatcher.InvokeAsync(() => WorkspaceMessage = message);
 
     public async Task<bool> CreateViewAsync(
         ViewDefinition definition,
@@ -427,6 +541,10 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         }
 
         var runtime = Interlocked.Exchange(ref _runtime, null);
+        if (runtime is not null)
+        {
+            runtime.DurableConfigurationChanged -= OnDurableConfigurationChanged;
+        }
         RaiseAllCommandStates();
         if (runtime is not null)
         {
@@ -687,6 +805,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         RaisePropertyChanged(nameof(ModeDetailText));
         RaisePropertyChanged(nameof(ModeBackgroundColor));
         RaisePropertyChanged(nameof(ModeForegroundColor));
+        RaisePropertyChanged(nameof(WindowTitle));
         RaisePropertyChanged(nameof(CanEditScene));
         RaisePropertyChanged(nameof(CanCreateView));
         RaisePropertyChanged(nameof(CanEditCameraAssignments));
@@ -695,5 +814,18 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
         RaiseAddViewCommandState();
         RaiseAddOutputCommandState();
         RaiseModeCommandStates();
+    }
+
+    private void OnDurableConfigurationChanged(object? sender, EventArgs eventArgs)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+        _ = _dispatcher.InvokeAsync(() =>
+        {
+            IsDirty = true;
+            DurableEditCommitted?.Invoke(this, EventArgs.Empty);
+        });
     }
 }

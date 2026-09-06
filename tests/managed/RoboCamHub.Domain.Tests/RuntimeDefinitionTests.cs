@@ -91,4 +91,86 @@ public sealed class RuntimeDefinitionTests
         Assert.Equal(new[] { "view-a", "view-b", "view-a" }, outputs.Select(output => output.ViewId));
         Assert.All(views, view => Assert.Equal("camera-1", view.GetCameraId(0)));
     }
+
+    [Fact]
+    public void LegacyTwoByTwoDefinitionMapsToStableNormalizedSceneElements()
+    {
+        var view = new ViewDefinition(
+            "view-main",
+            "Main",
+            "camera-1",
+            "camera-2",
+            "camera-3",
+            "camera-4");
+
+        Assert.True(view.IsLegacyFourSlotLayout);
+        var elements = Assert.IsAssignableFrom<IReadOnlyList<ViewSceneElementDefinition>>(view.SceneElements);
+        Assert.Equal(new[] { "legacy-slot-0", "legacy-slot-1", "legacy-slot-2", "legacy-slot-3" },
+            elements.Select(element => element.Id));
+        Assert.Collection(
+            elements.Cast<CameraElementDefinition>(),
+            element => Assert.Equal((0d, 0d, 0.5d, 0.5d), (element.X, element.Y, element.Width, element.Height)),
+            element => Assert.Equal((0.5d, 0d, 0.5d, 0.5d), (element.X, element.Y, element.Width, element.Height)),
+            element => Assert.Equal((0d, 0.5d, 0.5d, 0.5d), (element.X, element.Y, element.Width, element.Height)),
+            element => Assert.Equal((0.5d, 0.5d, 0.5d, 0.5d), (element.X, element.Y, element.Width, element.Height)));
+        Assert.False(view.SceneElements is ViewSceneElementDefinition[]);
+    }
+
+    [Fact]
+    public void ExplicitScenePreservesStableIdsOrderAndCameraTransforms()
+    {
+        var background = new CameraElementDefinition(
+            "camera-background",
+            "camera-1",
+            -0.1,
+            0,
+            1.2,
+            1,
+            zOrder: -10,
+            cropLeft: 0.1,
+            rotationDegrees: 12.5,
+            flipHorizontal: true,
+            fitMode: CameraElementFitMode.Cover);
+        var inset = new CameraElementDefinition(
+            "camera-inset",
+            "camera-1",
+            0.7,
+            0.7,
+            0.25,
+            0.25,
+            zOrder: 20,
+            visible: false);
+
+        var view = new ViewDefinition("view-scene", "Scene", new ViewSceneElementDefinition[] { background, inset });
+
+        Assert.False(view.IsLegacyFourSlotLayout);
+        Assert.Equal(new[] { "camera-background", "camera-inset" }, view.SceneElements.Select(element => element.Id));
+        Assert.Same(background, view.SceneElements[0]);
+        Assert.Equal("camera-1", background.CameraId);
+        Assert.Equal(CameraElementFitMode.Cover, background.FitMode);
+        Assert.True(background.FlipHorizontal);
+        Assert.False(inset.Visible);
+    }
+
+    [Fact]
+    public void SceneValidationRejectsDuplicatesInvalidGeometryCropAndRotation()
+    {
+        var valid = new CameraElementDefinition("element", "camera-1", 0, 0, 1, 1);
+        Assert.Throws<ArgumentException>(() => new ViewDefinition(
+            "view",
+            "View",
+            new ViewSceneElementDefinition[] { valid, valid }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CameraElementDefinition(
+            "zero-width", "camera-1", 0, 0, 0, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CameraElementDefinition(
+            "not-finite", "camera-1", double.NaN, 0, 1, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CameraElementDefinition(
+            "absurd", "camera-1", 17, 0, 1, 1));
+        Assert.Throws<ArgumentException>(() => new CameraElementDefinition(
+            "overcrop", "camera-1", 0, 0, 1, 1, cropLeft: 0.5, cropRight: 0.5));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CameraElementDefinition(
+            "rotation", "camera-1", 0, 0, 1, 1, rotationDegrees: 361));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CameraElementDefinition(
+            "fit", "camera-1", 0, 0, 1, 1, fitMode: (CameraElementFitMode)99));
+    }
 }

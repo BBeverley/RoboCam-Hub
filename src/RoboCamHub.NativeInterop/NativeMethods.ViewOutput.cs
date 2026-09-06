@@ -114,6 +114,31 @@ internal unsafe struct NativeViewPreviewStatusV1
     public fixed byte view_id_utf8[256];
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct NativeCameraElementConfigV1
+{
+    public uint struct_size;
+    public uint struct_version;
+    public byte* element_id_utf8;
+    public byte* camera_id_utf8;
+    public double x;
+    public double y;
+    public double width;
+    public double height;
+    public double crop_left;
+    public double crop_top;
+    public double crop_right;
+    public double crop_bottom;
+    public double rotation_degrees;
+    public int z_order;
+    public NativeCameraElementFitMode fit_mode;
+    public uint flip_horizontal;
+    public uint flip_vertical;
+    public uint visible;
+    public uint enabled;
+    public fixed uint reserved[4];
+}
+
 internal static partial class NativeMethods
 {
     internal const uint ViewStatusVersion = 3;
@@ -121,6 +146,7 @@ internal static partial class NativeMethods
     internal const uint NdiSenderStatusVersion = 2;
     internal const uint ViewPreviewConfigVersion = 1;
     internal const uint ViewPreviewStatusVersion = 1;
+    internal const uint ViewCameraElementVersion = 1;
 
     [LibraryImport(LibraryName, EntryPoint = "rch_view_create", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial NativeResult ViewCreate(
@@ -139,6 +165,12 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibraryName, EntryPoint = "rch_view_unbind_source")]
     internal static partial NativeResult ViewUnbindSource(NativeViewHandle view, uint slotIndex);
+
+    [LibraryImport(LibraryName, EntryPoint = "rch_view_apply_camera_scene")]
+    internal static unsafe partial NativeResult ViewApplyCameraScene(
+        NativeViewHandle view,
+        NativeCameraElementConfigV1* elements,
+        uint elementCount);
 
     [LibraryImport(LibraryName, EntryPoint = "rch_view_get_status")]
     internal static partial NativeResult ViewGetStatus(

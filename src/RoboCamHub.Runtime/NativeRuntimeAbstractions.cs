@@ -26,6 +26,8 @@ internal interface INativeRuntimeEngine : IDisposable
 
 internal interface INativeRuntimeView : IDisposable
 {
+    NativeResult ApplyCameraScene(IReadOnlyList<NativeCameraElementConfig> elements);
+
     NativeResult BindCameraSource(uint slotIndex, string cameraId);
 
     NativeResult UnbindSource(uint slotIndex);
@@ -93,6 +95,9 @@ internal sealed class NativeRuntimeEngine(NativeEngine engine) : INativeRuntimeE
 
 internal sealed class NativeRuntimeView(NativeView view) : INativeRuntimeView
 {
+    public NativeResult ApplyCameraScene(IReadOnlyList<NativeCameraElementConfig> elements)
+        => view.ApplyCameraScene(elements);
+
     public NativeResult BindCameraSource(uint slotIndex, string cameraId)
         => view.BindCameraSource(slotIndex, cameraId);
 

@@ -163,6 +163,23 @@ without inferring it from UI state. See
 `docs/27-gate-5d-multiple-views-outputs.md` for the application model, teardown
 rules and measured proof.
 
+## Gate 6A scene and transform status
+
+Gate 6A replaces the native fixed-layout implementation model with an ordered,
+atomic camera-element scene while preserving the existing four-slot UI as a
+compatibility projection. Geometry and crop use normalized View/source
+coordinates, rotation is clockwise about the element centre, and Z-order has a
+stable element-ID tie-break. Crop, Stretch/Contain/Cover fit, horizontal and
+vertical flip, arbitrary rotation, visibility and off-canvas clipping are
+performed in the existing native CPU compositor.
+
+The compositor continues to acquire only the newest decoded frame. Each
+element retains at most one native last-good lease, and duplicate uses of a
+camera share its one ingest/decode owner. Complete scene updates validate before
+one swap; failure retains the previous live scene. Preview and NDI continue to
+consume the same one latest composed View frame. See
+`docs/28-gate-6a-view-scene-transform-foundation.md`.
+
 ## Multiple Views
 
 Users may create any practical number of Views. Examples:

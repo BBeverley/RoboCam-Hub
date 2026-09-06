@@ -152,6 +152,12 @@ mechanism selected in ADR 0002. Full frames remain native-owned; managed code
 carries only a typed host identity and low-frequency status. A future GPU
 compositor may replace the platform presenter behind that ownership boundary.
 
+Gate 6A additively extends ABI 1.9 with a versioned plain-C camera-element
+configuration structure and one complete-scene apply call. The array and UTF-8
+strings are borrowed for the call only. Native code validates and resolves the
+entire candidate before atomically replacing the scene. No frame data, C++ type
+or allocator ownership crosses the boundary.
+
 ## Threading
 
 P/Invoke calls that may block on network/media work must not execute synchronously on the Avalonia UI thread.

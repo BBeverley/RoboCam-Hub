@@ -125,6 +125,17 @@ internal sealed class RecordingNativeRuntimeView(List<string> events, string vie
 
     public int OutputConsumerCount { get; private set; }
 
+    public NativeResult ApplyCameraScene(IReadOnlyList<NativeCameraElementConfig> elements)
+    {
+        _bindings.Clear();
+        foreach (var (element, index) in elements.Select((element, index) => (element, index)))
+        {
+            _bindings[(uint)index] = element.CameraId;
+        }
+        events.Add($"view:apply-scene:{viewId}:{elements.Count}");
+        return NativeResult.Ok;
+    }
+
     public NativeResult BindCameraSource(uint slotIndex, string cameraId)
     {
         _bindings[slotIndex] = cameraId;

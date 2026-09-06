@@ -19,11 +19,38 @@ public sealed class ViewRuntime : IDisposable
         Definition = definition;
     }
 
-    public ViewDefinition Definition { get; }
+    public ViewDefinition Definition { get; private set; }
 
     public bool IsDisposed => _disposed;
 
     internal INativeRuntimeView NativeView => _nativeView;
+
+    public void ApplyScene(IReadOnlyList<ViewSceneElementDefinition> elements)
+    {
+        ThrowIfUnavailable();
+        ArgumentNullException.ThrowIfNull(elements);
+
+        var updatedDefinition = new ViewDefinition(Definition.Id, Definition.Name, elements);
+
+        var nativeElements = new List<NativeCameraElementConfig>(updatedDefinition.SceneElements.Count);
+        foreach (var element in updatedDefinition.SceneElements)
+        {
+            ArgumentNullException.ThrowIfNull(element);
+            if (element is not CameraElementDefinition cameraElement)
+            {
+                throw new NotSupportedException(
+                    $"Scene element type '{element.GetType().Name}' is not supported by Gate 6A.");
+            }
+
+            _ = _owner.GetCamera(cameraElement.CameraId);
+            nativeElements.Add(ToNative(cameraElement));
+        }
+
+        RuntimeGuard.EnsureSuccess(
+            $"Applying View '{Definition.Id}' scene",
+            _nativeView.ApplyCameraScene(nativeElements));
+        Definition = updatedDefinition;
+    }
 
     public void BindCameraSource(uint slotIndex, string cameraId)
     {
@@ -126,4 +153,30 @@ public sealed class ViewRuntime : IDisposable
             NativeViewSourceState.MissingOrStale => ViewSourceRuntimeState.MissingOrStale,
             _ => throw new InvalidOperationException($"Unknown native View source state {(uint)state}."),
         };
+
+    internal static NativeCameraElementConfig ToNative(CameraElementDefinition element)
+        => new(
+            element.Id,
+            element.CameraId,
+            element.X,
+            element.Y,
+            element.Width,
+            element.Height,
+            element.ZOrder,
+            element.CropLeft,
+            element.CropTop,
+            element.CropRight,
+            element.CropBottom,
+            element.RotationDegrees,
+            element.FlipHorizontal,
+            element.FlipVertical,
+            element.Visible,
+            element.Enabled,
+            element.FitMode switch
+            {
+                CameraElementFitMode.Stretch => NativeCameraElementFitMode.Stretch,
+                CameraElementFitMode.Contain => NativeCameraElementFitMode.Contain,
+                CameraElementFitMode.Cover => NativeCameraElementFitMode.Cover,
+                _ => throw new ArgumentOutOfRangeException(nameof(element)),
+            });
 }

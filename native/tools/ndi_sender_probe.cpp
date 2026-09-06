@@ -105,9 +105,15 @@ rch_ndi_sender_status_v1 QuerySender(rch_ndi_sender_handle sender, bool& ok)
 
 int main(int argc, char** argv)
 {
-  if (argc != 6) {
+  if (argc != 6 && argc != 7) {
     std::cerr << "Usage: robocamhub_ndi_sender_probe <duration-seconds> "
-                 "<rtsp-url-1> <rtsp-url-2> <rtsp-url-3> <rtsp-url-4>\n";
+                 "<rtsp-url-1> <rtsp-url-2> <rtsp-url-3> <rtsp-url-4> "
+                 "[--gate6a-scene]\n";
+    return 2;
+  }
+  const bool use_gate6a_scene = argc == 7 && std::string(argv[6]) == "--gate6a-scene";
+  if (argc == 7 && !use_gate6a_scene) {
+    std::cerr << "Unknown option: " << argv[6] << '\n';
     return 2;
   }
 
@@ -186,12 +192,60 @@ int main(int argc, char** argv)
     return 1;
   }
 
-  result = rch_view_create(engine, "Gate4A-Validation-View", &view);
-  for (std::size_t index = 0; result == RCH_RESULT_OK && index < kCameraCount; ++index) {
-    result = rch_view_bind_camera_source(
+  const char* view_id = use_gate6a_scene ? "Gate6A-Validation-View" : "Gate4A-Validation-View";
+  result = rch_view_create(engine, view_id, &view);
+  if (result == RCH_RESULT_OK && use_gate6a_scene) {
+    std::array<rch_view_camera_element_v1, kCameraCount> elements{};
+    const std::array<const char*, kCameraCount> element_ids{
+      "gate6a-spot-1-large",
+      "gate6a-spot-2-pip",
+      "gate6a-spot-3-cropped",
+      "gate6a-spot-4-rotated",
+    };
+    for (std::size_t index = 0; index < elements.size(); ++index) {
+      elements[index].struct_size = sizeof(rch_view_camera_element_v1);
+      elements[index].struct_version = RCH_VIEW_CAMERA_ELEMENT_VERSION;
+      elements[index].element_id_utf8 = element_ids[index];
+      elements[index].camera_id_utf8 = camera_ids[index].c_str();
+      elements[index].fit_mode = RCH_VIEW_CAMERA_FIT_COVER;
+      elements[index].visible = 1U;
+      elements[index].enabled = 1U;
+    }
+    elements[0].x = 0.02;
+    elements[0].y = 0.03;
+    elements[0].width = 0.72;
+    elements[0].height = 0.9;
+    elements[0].z_order = 0;
+    elements[1].x = 0.68;
+    elements[1].y = 0.05;
+    elements[1].width = 0.29;
+    elements[1].height = 0.29;
+    elements[1].z_order = 30;
+    elements[2].x = 0.64;
+    elements[2].y = 0.58;
+    elements[2].width = 0.34;
+    elements[2].height = 0.36;
+    elements[2].crop_left = 0.18;
+    elements[2].crop_right = 0.18;
+    elements[2].z_order = 20;
+    elements[3].x = 0.52;
+    elements[3].y = 0.28;
+    elements[3].width = 0.30;
+    elements[3].height = 0.30;
+    elements[3].rotation_degrees = 12.0;
+    elements[3].flip_horizontal = 1U;
+    elements[3].z_order = 10;
+    result = rch_view_apply_camera_scene(
       view,
-      static_cast<std::uint32_t>(index),
-      camera_ids[index].c_str());
+      elements.data(),
+      static_cast<std::uint32_t>(elements.size()));
+  } else {
+    for (std::size_t index = 0; result == RCH_RESULT_OK && index < kCameraCount; ++index) {
+      result = rch_view_bind_camera_source(
+        view,
+        static_cast<std::uint32_t>(index),
+        camera_ids[index].c_str());
+    }
   }
   if (result != RCH_RESULT_OK) {
     std::cerr << "View setup failed: " << result << '\n';
@@ -212,7 +266,8 @@ int main(int argc, char** argv)
             << " baseline_view_age_ms=" << baseline_view.latest_composed_frame_age_ms
             << std::endl;
 
-  result = rch_ndi_sender_create(view, "ROBOCAM - Gate4A", &sender);
+  const char* sender_name = use_gate6a_scene ? "ROBOCAM - Gate6A" : "ROBOCAM - Gate4A";
+  result = rch_ndi_sender_create(view, sender_name, &sender);
   if (result != RCH_RESULT_OK) {
     std::cerr << "Sender setup failed: " << result << '\n';
     cleanup();
@@ -235,7 +290,9 @@ int main(int argc, char** argv)
 
   bool invariant_failure = false;
   std::uint64_t previous_sent_sequence = 0U;
-  std::cout << "backend=official sender_name=ROBOCAM - Gate4A pixel_format=RGBA "
+  std::cout << "backend=official sender_name=" << sender_name
+            << " scene=" << (use_gate6a_scene ? "freeform" : "legacy-2x2")
+            << " pixel_format=RGBA "
                "size=1920x1080 target_fps=60 frame_copy=none\n";
   for (std::uint32_t elapsed = 0; elapsed < duration_seconds; ++elapsed) {
     bool engine_ok = false;
@@ -278,6 +335,8 @@ int main(int argc, char** argv)
     std::cout << " view_sequence=" << view_status.latest_composed_frame_sequence
               << " view_fps=" << static_cast<double>(view_status.render_fps_milli) / 1000.0
               << " view_age_ms=" << view_status.latest_composed_frame_age_ms
+              << " render_avg_us=" << view_status.average_render_duration_us
+              << " render_p95_us=" << view_status.p95_render_duration_us
               << " view_live=" << view_status.live_source_count
               << " view_frozen=" << view_status.frozen_source_count
               << " cameras=" << engine_status.configured_camera_count

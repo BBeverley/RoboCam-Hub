@@ -21,6 +21,11 @@ public interface IWorkspaceRuntimeService : IAsyncDisposable
 
     Task AddViewAsync(ViewDefinition definition, CancellationToken cancellationToken = default);
 
+    Task ApplyViewSceneAsync(
+        string viewId,
+        IReadOnlyList<ViewSceneElementDefinition> elements,
+        CancellationToken cancellationToken = default);
+
     Task BindCameraSourceAsync(
         string viewId,
         uint slotIndex,

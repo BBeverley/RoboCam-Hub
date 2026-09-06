@@ -74,4 +74,54 @@ public sealed class NativeViewOutputInteropTests
         Assert.Throws<ObjectDisposedException>(() => view.TryGetStatus(out _));
         Assert.Throws<ObjectDisposedException>(() => view.BindCameraSource(0, "camera-1"));
     }
+
+    [Fact]
+    public void VersionedSceneApplyUsesLogicalIdsAndRejectsInvalidReferencesAtomically()
+    {
+        using var engine = NativeEngine.Create();
+        Assert.Equal(NativeResult.Ok, engine.AddOrUpdateCamera(new NativeCameraConfig(
+            "camera-1",
+            "rtsp://127.0.0.1:1/profile2/media.smp",
+            ConnectTimeoutMs: 250)));
+        Assert.Equal(NativeResult.Ok, engine.TryCreateView("view-scene", out var view));
+        Assert.NotNull(view);
+        using (view)
+        {
+            var scene = new[]
+            {
+                new NativeCameraElementConfig(
+                    "element-large",
+                    "camera-1",
+                    0,
+                    0,
+                    0.8,
+                    1,
+                    CropLeft: 0.1,
+                    RotationDegrees: 20,
+                    FlipHorizontal: true,
+                    FitMode: NativeCameraElementFitMode.Cover),
+                new NativeCameraElementConfig(
+                    "element-inset",
+                    "camera-1",
+                    0.7,
+                    0.7,
+                    0.25,
+                    0.25,
+                    ZOrder: 10),
+            };
+
+            Assert.Equal(NativeResult.Ok, view.ApplyCameraScene(scene));
+            Assert.Equal(NativeResult.Ok, view.TryGetStatus(out var applied));
+            Assert.Equal((uint)2, applied.BoundSourceCount);
+
+            var invalid = new[]
+            {
+                scene[0],
+                scene[1] with { ElementId = "element-large", CameraId = "missing-camera" },
+            };
+            Assert.Equal(NativeResult.InvalidArgument, view.ApplyCameraScene(invalid));
+            Assert.Equal(NativeResult.Ok, view.TryGetStatus(out var afterInvalid));
+            Assert.Equal((uint)2, afterInvalid.BoundSourceCount);
+        }
+    }
 }

@@ -9,7 +9,7 @@ stage="$repo_root/.packaging/macos"
 publish="$stage/publish"
 app="$output_root/RoboCam-Hub.app"
 macos="$app/Contents/MacOS"
-runtime="$macos/gstreamer-1.0"
+runtime="$macos/gstreamer"
 
 [[ "$(uname -s)" == Darwin ]] || { echo "macOS packaging must run on macOS." >&2; exit 1; }
 [[ "$(uname -m)" == arm64 ]] || { echo "The Developer Preview macOS package must be built on Apple Silicon." >&2; exit 1; }
@@ -104,7 +104,7 @@ rewrite_binary() {
   done < <(otool -L "$owner" | sed -nE 's/^[[:space:]]+([^[:space:]]+).*/\1/p')
 }
 
-rewrite_binary "$macos/librobocamhub_native.dylib" '@loader_path/gstreamer-1.0'
+rewrite_binary "$macos/librobocamhub_native.dylib" '@loader_path/gstreamer'
 for binary in "$runtime"/*; do
   file "$binary" | grep -q 'Mach-O' || continue
   rewrite_binary "$binary" '@loader_path'
@@ -121,6 +121,7 @@ for license in "$gst_root/share/gstreamer-1.0/LICENSE" "$gst_root/COPYING" "$gst
     break
   fi
 done
-codesign --force --deep --sign - "$app"
+codesign --force --sign - "$macos/librobocamhub_native.dylib"
+codesign --force --sign - "$app"
 "$repo_root/scripts/verify-package.sh" "$app"
 echo "Created $app"

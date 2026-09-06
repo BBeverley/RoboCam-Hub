@@ -5,7 +5,9 @@ internal static class PackagedRuntimeBootstrap
     internal static void Configure()
     {
         var applicationDirectory = AppContext.BaseDirectory;
-        var pluginDirectory = Path.Combine(applicationDirectory, "gstreamer-1.0");
+        var pluginDirectory = Path.Combine(
+            applicationDirectory,
+            OperatingSystem.IsMacOS() ? "gstreamer" : "gstreamer-1.0");
         if (!Directory.Exists(pluginDirectory))
         {
             return;

@@ -139,6 +139,65 @@ These short windows do not establish a leak trend or prove leak freedom. Raw
 before/after logs are retained in the ignored Release build directory as
 `gate6d-performance.log` and `gate6d-performance-optimized.log`.
 
+## Final Gate 6D acceptance validation
+
+The final visual/functional acceptance run completed on 2026-09-06 at commit
+`c69e5f7d5b9c7e5f1f5f285a67ca986c3ab4816e`. The test host was macOS 14.7.1
+x86_64 with official NDI SDK 6.3.2.0. NDI Video Monitor 5.2 was the known-good
+official receiver. Sender and receiver ran on the same Mac, so this proves the
+official SDK/receiver path but is a loopback-network validation.
+
+One 1920×1080 View contained two independently configured local RTSP/H.264
+camera sources, UTF-8 text, a transparent PNG, a JPEG, a filled/outlined
+rectangle and a frame. The operator exercised system-font selection,
+left/centre/right and top/centre/bottom text alignment, bold, italic,
+underline, alpha-aware text/shape colours, visibility, mixed Z-order and
+element position/resize/rotation. The transparent PNG, JPEG, shape fill and
+outline, and frame all rendered correctly. Both camera images continued to
+update behind and around the visual elements. Unavailable-font fallback
+remains covered by the deterministic native tests described above.
+
+The operator confirmed that the official receiver and clean native Avalonia
+preview showed the same composition, including the focused JPEG and styled
+UTF-8 text rerun. Editor selection handles and chrome were confined to the
+schematic editor canvas and did not appear in the clean preview or NDI output.
+
+The representative live capture recorded:
+
+| Evidence | Result |
+|---|---:|
+| View cadence | 10.2 fps |
+| native preview cadence | 10.5 fps (operator observed approximately 12–15 fps during the run) |
+| NDI send cadence | 11.0 fps (operator observed approximately 12–15 fps during the run) |
+| preview latest-frame age | 19 ms |
+| NDI latest-frame age | 4 ms |
+| NDI send average/p95 | 9.975/15.121 ms |
+| preview sequence/skipped | 43,878 / 22,688 |
+| NDI skipped | 17,825 |
+| connected NDI receivers | 2 |
+| RTSP sessions/decoders while live | 2 / 2 |
+| RTSP sessions/decoders after stop | 0 / 0 |
+
+One configured View used its one native compositor; preview and NDI consumed
+that compositor's existing latest-frame output. Stopping the output and both
+cameras reported `Stopped` and returned RTSP-session/decoder ownership to
+exactly 0/0. The application then exited normally. No duplicate ingest,
+decoder, compositor or managed full-frame transport was introduced.
+
+A six-sample process snapshot while the final mixed scene and NDI output were
+active measured 182.8–255.7% CPU (231.1% mean) and 2.04–2.59 GiB RSS. RSS fell
+substantially within that short sample and did not show monotonic growth. This
+brief acceptance snapshot is not a soak, does not establish a memory trend and
+does not prove leak freedom. The measured cadence is accepted as a functional
+result for the existing Intel CPU compositor, not as evidence that the future
+60 fps performance target has been met.
+
+This run used two independent deterministic local RTSP/H.264 sources rather
+than two physical cameras. Windows and Apple Silicon official-SDK visual
+runtime validation remain separate platform checks; automated Windows x64 and
+macOS arm64 builds/tests cover portability but do not replace those receiver
+checks.
+
 ## Manual validation procedure
 
 On both macOS and Windows where available:

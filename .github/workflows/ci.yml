@@ -127,3 +127,6 @@ jobs:
 
       - name: Run managed Avalonia workspace/application tests
         run: dotnet test tests/managed/RoboCamHub.Application.Tests/RoboCamHub.Application.Tests.csproj --configuration Release --no-build --no-restore
+
+      - name: Run managed persistence tests
+        run: dotnet test tests/managed/RoboCamHub.Persistence.Tests/RoboCamHub.Persistence.Tests.csproj --configuration Release --no-build --no-restore

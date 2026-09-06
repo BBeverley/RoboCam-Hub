@@ -31,8 +31,8 @@ The existing native compositor owns all text and image pixels.
   are capped at 256 MiB. No frame queue is added.
 - Managed `ImageElementDefinition` contains only a stable `AssetId`. The
   associated `AssetDefinition` separates display/media metadata from its local
-  runtime source reference. Durable show packaging remains a later persistence
-  task; the local path is not the element's durable identity.
+  runtime source reference. Gate 6F packages the asset by stable identity as
+  specified by ADR 0004; the local path is not the element's durable identity.
 
 ## Consequences
 
@@ -42,6 +42,6 @@ decode images or shape text. Preview and every NDI sender continue to consume
 the same latest composed View frame, and visual elements create no RTSP session
 or decoder ownership.
 
-Gate 6D supports system fonts, PNG and JPEG only. Web fonts, WebP/SVG, video
-assets, animation, transitions, embedded show assets and a GPU compositor are
-explicitly deferred.
+Gate 6D supports system fonts, PNG and JPEG only. Gate 6F adds embedded show
+assets without changing native resource ownership. Web fonts, WebP/SVG, video
+assets, animation, transitions and a GPU compositor remain explicitly deferred.

@@ -5,6 +5,8 @@ namespace RoboCamHub.Application;
 
 public interface IWorkspaceRuntimeService : IAsyncDisposable
 {
+    event EventHandler? DurableConfigurationChanged;
+
     IReadOnlyList<CameraDefinition> CameraDefinitions { get; }
 
     IReadOnlyList<ViewDefinition> ViewDefinitions { get; }
@@ -12,6 +14,8 @@ public interface IWorkspaceRuntimeService : IAsyncDisposable
     IReadOnlyList<OutputDefinition> OutputDefinitions { get; }
 
     string SelectedViewId { get; }
+
+    Task StartConfiguredAsync(CancellationToken cancellationToken = default);
 
     Task AddCameraAsync(CameraDefinition definition, CancellationToken cancellationToken = default);
 

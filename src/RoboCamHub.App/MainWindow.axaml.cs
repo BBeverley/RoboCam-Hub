@@ -6,20 +6,38 @@ using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using RoboCamHub.Application;
 using RoboCamHub.Domain;
+using RoboCamHub.Persistence;
 
 namespace RoboCamHub.App;
 
 public partial class MainWindow : Window
 {
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly AvaloniaUiDispatcher _dispatcher = new();
+    private readonly ShowFileService _showFiles;
+    private readonly RecoveryStore _recovery;
+    private readonly MachinePreferencesStore _preferencesStore;
+    private readonly WorkspaceLoadCoordinator _workspaceLoader;
     private WorkspaceViewModel? _workspace;
+    private PreparedWorkspace? _preparedWorkspace;
+    private WorkspacePersistenceCoordinator? _persistence;
+    private MachinePreferences _preferences = new();
     private bool _allowClose;
     private bool _shutdownStarted;
+    private bool _fileOperationInProgress;
     private Window? _propertiesWindow;
     private FullscreenMonitorWindow? _fullscreenWindow;
 
     public MainWindow()
     {
+        _showFiles = new ShowFileService();
+        _recovery = new RecoveryStore(_showFiles);
+        _preferencesStore = new MachinePreferencesStore();
+        _workspaceLoader = new WorkspaceLoadCoordinator(
+            _showFiles,
+            _recovery,
+            new DefaultWorkspaceRuntimeFactory(),
+            _dispatcher);
         InitializeComponent();
         EditorCanvas.PropertiesRequested += OnEditorPropertiesRequested;
         EditorCanvas.LocateSourceRequested += OnLocateSourceRequested;
@@ -32,22 +50,42 @@ public partial class MainWindow : Window
     {
         try
         {
-            var runtime = await WorkspaceRuntimeService.CreateDefaultAsync(_lifetime.Token);
-            if (_lifetime.IsCancellationRequested)
+            try
             {
-                await runtime.DisposeAsync();
-                return;
+                _preferences = await _preferencesStore.LoadAsync(_lifetime.Token);
+                ApplyMachinePreferences();
+            }
+            catch (Exception exception)
+            {
+                StartupText.Text = $"Machine preferences were ignored: {exception.Message}";
             }
 
-            _workspace = new WorkspaceViewModel(runtime, new AvaloniaUiDispatcher());
-            _workspace.PropertyChanged += OnWorkspacePropertyChanged;
-            DataContext = _workspace;
-            ViewPreviewHost.Preview = _workspace.Preview;
-            EditorCanvas.Editor = _workspace.SelectedView.Editor;
+            var prepared = await _workspaceLoader.NewAsync(_lifetime.Token);
+            await ActivatePreparedWorkspaceAsync(prepared);
+            try
+            {
+                var recovery = (await _recovery.FindNewerAsync(_lifetime.Token)).FirstOrDefault();
+                if (recovery is not null)
+                {
+                    var decision = await new RecoveryPromptWindow(recovery).ShowDialog<RecoveryDecision>(this);
+                    if (decision == RecoveryDecision.Recover)
+                    {
+                        var recovered = await _workspaceLoader.RecoverAsync(recovery, _lifetime.Token);
+                        await ActivatePreparedWorkspaceAsync(recovered);
+                    }
+                    else if (decision == RecoveryDecision.Discard)
+                    {
+                        await _recovery.DiscardAsync(recovery);
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                await _workspace!.ReportPersistenceErrorAsync("recovery", exception);
+            }
+
             StartupPanel.IsVisible = false;
             WorkspaceRoot.IsVisible = true;
-            _workspace.StartStatusPolling();
-            UpdateModePresentation();
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
@@ -65,7 +103,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        _lifetime.Cancel();
         if (_workspace is null)
         {
             _allowClose = true;
@@ -76,8 +113,19 @@ public partial class MainWindow : Window
         if (!_shutdownStarted)
         {
             _shutdownStarted = true;
-            _ = DisposeAndCloseAsync();
+            _ = ConfirmAndCloseAsync();
         }
+    }
+
+    private async Task ConfirmAndCloseAsync()
+    {
+        if (!await ConfirmSafeToReplaceAsync())
+        {
+            _shutdownStarted = false;
+            return;
+        }
+        _lifetime.Cancel();
+        await DisposeAndCloseAsync();
     }
 
     private async Task DisposeAndCloseAsync()
@@ -88,8 +136,21 @@ public partial class MainWindow : Window
         _fullscreenWindow = null;
         ViewPreviewHost.DetachPreview();
         EditorCanvas.Editor = null;
-        _workspace!.PropertyChanged -= OnWorkspacePropertyChanged;
-        await _workspace!.DisposeAsync();
+        if (_workspace is not null)
+        {
+            _workspace.PropertyChanged -= OnWorkspacePropertyChanged;
+        }
+        if (_persistence is not null)
+        {
+            await _persistence.DisposeAsync();
+            _persistence = null;
+        }
+        if (_preparedWorkspace is not null)
+        {
+            await _preparedWorkspace.DisposeAsync();
+            _preparedWorkspace = null;
+        }
+        await SaveMachinePreferencesAsync();
         _workspace = null;
         DataContext = null;
         _allowClose = true;
@@ -106,6 +167,12 @@ public partial class MainWindow : Window
         if (eventArgs.PropertyName == nameof(WorkspaceViewModel.Mode))
         {
             UpdateModePresentation();
+        }
+        if (eventArgs.PropertyName is nameof(WorkspaceViewModel.WindowTitle)
+            or nameof(WorkspaceViewModel.IsDirty)
+            or nameof(WorkspaceViewModel.CurrentFilePath))
+        {
+            UpdateWindowTitle();
         }
     }
 
@@ -334,6 +401,23 @@ public partial class MainWindow : Window
             eventArgs.Handled = true;
             EnterFullscreen();
         }
+        var commandModifier = eventArgs.KeyModifiers.HasFlag(KeyModifiers.Control)
+            || eventArgs.KeyModifiers.HasFlag(KeyModifiers.Meta);
+        if (commandModifier && eventArgs.Key == Key.S)
+        {
+            eventArgs.Handled = true;
+            _ = SaveCurrentAsync(eventArgs.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        }
+        else if (commandModifier && eventArgs.Key == Key.N)
+        {
+            eventArgs.Handled = true;
+            _ = NewShowAsync();
+        }
+        else if (commandModifier && eventArgs.Key == Key.O)
+        {
+            eventArgs.Handled = true;
+            _ = PickAndOpenShowAsync();
+        }
     }
 
     private void EnterFullscreen()
@@ -371,7 +455,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        Title = $"RoboCam-Hub — {(_workspace.IsShowMode ? "Show Mode" : "Edit Mode")}";
+        UpdateWindowTitle();
         if (_workspace.IsShowMode)
         {
             _propertiesWindow?.Close();
@@ -387,5 +471,263 @@ public partial class MainWindow : Window
             Grid.SetColumn(NativePreviewPanel, 1);
             Grid.SetColumnSpan(NativePreviewPanel, 1);
         }
+    }
+
+    private async void OnNewShow(object? sender, RoutedEventArgs eventArgs) => await NewShowAsync();
+
+    private async Task NewShowAsync()
+    {
+        if (_fileOperationInProgress || !await ConfirmSafeToReplaceAsync())
+        {
+            return;
+        }
+        await RunFileOperationAsync(async () =>
+        {
+            var prepared = await _workspaceLoader.NewAsync(_lifetime.Token);
+            await ActivatePreparedWorkspaceAsync(prepared);
+        });
+    }
+
+    private async void OnOpenShow(object? sender, RoutedEventArgs eventArgs) => await PickAndOpenShowAsync();
+
+    private async Task PickAndOpenShowAsync()
+    {
+        if (_fileOperationInProgress || !await ConfirmSafeToReplaceAsync())
+        {
+            return;
+        }
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Open RoboCam-Hub Show",
+            AllowMultiple = false,
+            FileTypeFilter = [ShowFilePickerType()],
+        });
+        var path = files.FirstOrDefault()?.TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+        await OpenPathAsync(path);
+    }
+
+    private async void OnSaveShow(object? sender, RoutedEventArgs eventArgs) => await SaveCurrentAsync(forceSaveAs: false);
+
+    private async void OnSaveShowAs(object? sender, RoutedEventArgs eventArgs) => await SaveCurrentAsync(forceSaveAs: true);
+
+    private async Task OpenPathAsync(string path)
+    {
+        await RunFileOperationAsync(async () =>
+        {
+            var prepared = await _workspaceLoader.OpenAsync(path, _lifetime.Token);
+            await ActivatePreparedWorkspaceAsync(prepared);
+            await AddRecentFileAsync(path);
+            if (prepared.Warnings.Count > 0)
+            {
+                await prepared.Workspace.ReportPersistenceWarningAsync(string.Join(" ", prepared.Warnings.Select(warning => warning.Message)));
+            }
+        });
+    }
+
+    private async Task<bool> SaveCurrentAsync(bool forceSaveAs)
+    {
+        if (_workspace is null || _persistence is null || _fileOperationInProgress)
+        {
+            return false;
+        }
+        var path = forceSaveAs ? null : _workspace.CurrentFilePath;
+        if (path is null)
+        {
+            var suggestedName = SanitizeFileName(_workspace.ShowName) + ShowFileService.DefaultExtension;
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Save RoboCam-Hub Show",
+                SuggestedFileName = suggestedName,
+                DefaultExtension = ShowFileService.DefaultExtension.TrimStart('.'),
+                FileTypeChoices = [ShowFilePickerType()],
+            });
+            path = file?.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+        }
+
+        var succeeded = false;
+        await RunFileOperationAsync(async () =>
+        {
+            await _persistence.SaveAsync(path, _lifetime.Token);
+            await AddRecentFileAsync(ShowFileService.EnsureExtension(path));
+            succeeded = true;
+        });
+        return succeeded;
+    }
+
+    private async Task<bool> ConfirmSafeToReplaceAsync()
+    {
+        if (_workspace is not { IsDirty: true })
+        {
+            return true;
+        }
+        var decision = await new SaveChangesWindow(_workspace.ShowFileDisplayName)
+            .ShowDialog<SaveChangesDecision>(this);
+        return decision switch
+        {
+            SaveChangesDecision.DontSave => true,
+            SaveChangesDecision.Save => await SaveCurrentAsync(forceSaveAs: false),
+            _ => false,
+        };
+    }
+
+    private async Task ActivatePreparedWorkspaceAsync(PreparedWorkspace prepared)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        _propertiesWindow?.Close();
+        _propertiesWindow = null;
+        _fullscreenWindow?.Close();
+        _fullscreenWindow = null;
+        ViewPreviewHost.DetachPreview();
+        EditorCanvas.Editor = null;
+        if (_workspace is not null)
+        {
+            _workspace.PropertyChanged -= OnWorkspacePropertyChanged;
+        }
+        if (_persistence is not null)
+        {
+            await _persistence.DisposeAsync();
+        }
+        if (_preparedWorkspace is not null)
+        {
+            await _preparedWorkspace.DisposeAsync();
+        }
+
+        _preparedWorkspace = prepared;
+        _workspace = prepared.Workspace;
+        await _workspace.StartConfiguredRuntimeAsync(_lifetime.Token);
+        _workspace.PropertyChanged += OnWorkspacePropertyChanged;
+        _persistence = new WorkspacePersistenceCoordinator(_workspace, _showFiles, _recovery);
+        DataContext = _workspace;
+        ViewPreviewHost.Preview = _workspace.Preview;
+        EditorCanvas.Editor = _workspace.SelectedView.Editor;
+        _workspace.StartStatusPolling();
+        UpdateModePresentation();
+    }
+
+    private async Task RunFileOperationAsync(Func<Task> operation)
+    {
+        _fileOperationInProgress = true;
+        try
+        {
+            await operation();
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            if (_workspace is not null)
+            {
+                await _workspace.ReportPersistenceErrorAsync("operation", exception);
+            }
+            else
+            {
+                StartupText.Text = $"Show file operation failed: {exception.Message}";
+            }
+        }
+        finally
+        {
+            _fileOperationInProgress = false;
+        }
+    }
+
+    private async Task AddRecentFileAsync(string path)
+    {
+        path = Path.GetFullPath(path);
+        _preferences.RecentFiles.RemoveAll(existing => string.Equals(existing, path, StringComparison.OrdinalIgnoreCase));
+        _preferences.RecentFiles.Insert(0, path);
+        if (_preferences.RecentFiles.Count > 10)
+        {
+            _preferences.RecentFiles.RemoveRange(10, _preferences.RecentFiles.Count - 10);
+        }
+        _preferences.LastFolder = Path.GetDirectoryName(path);
+        UpdateRecentMenu();
+        await _preferencesStore.SaveAsync(_preferences, _lifetime.Token);
+    }
+
+    private void UpdateRecentMenu()
+    {
+        var items = _preferences.RecentFiles.Select(path =>
+        {
+            var item = new MenuItem { Header = path };
+            item.Click += async (_, _) =>
+            {
+                if (!_fileOperationInProgress && await ConfirmSafeToReplaceAsync())
+                {
+                    await OpenPathAsync(path);
+                }
+            };
+            return item;
+        }).ToArray();
+        RecentMenu.ItemsSource = items;
+        RecentMenu.IsEnabled = items.Length > 0;
+    }
+
+    private void ApplyMachinePreferences()
+    {
+        if (_preferences.WindowWidth is >= 1120 and <= 10000)
+        {
+            Width = _preferences.WindowWidth.Value;
+        }
+        if (_preferences.WindowHeight is >= 700 and <= 10000)
+        {
+            Height = _preferences.WindowHeight.Value;
+        }
+        if (_preferences.WindowX is >= -50000 and <= 50000 && _preferences.WindowY is >= -50000 and <= 50000)
+        {
+            Position = new PixelPoint((int)_preferences.WindowX.Value, (int)_preferences.WindowY.Value);
+        }
+        if (Enum.TryParse<WindowState>(_preferences.WindowState, out var state) && state != WindowState.Minimized)
+        {
+            WindowState = state;
+        }
+        UpdateRecentMenu();
+    }
+
+    private async Task SaveMachinePreferencesAsync()
+    {
+        _preferences.WindowX = Position.X;
+        _preferences.WindowY = Position.Y;
+        _preferences.WindowWidth = Width;
+        _preferences.WindowHeight = Height;
+        _preferences.WindowState = WindowState == WindowState.Minimized ? nameof(WindowState.Normal) : WindowState.ToString();
+        try
+        {
+            await _preferencesStore.SaveAsync(_preferences);
+        }
+        catch
+        {
+            // Machine preferences are never allowed to block show/runtime shutdown.
+        }
+    }
+
+    private void UpdateWindowTitle()
+    {
+        if (_workspace is not null)
+        {
+            Title = _workspace.WindowTitle;
+        }
+    }
+
+    private static FilePickerFileType ShowFilePickerType()
+        => new("RoboCam-Hub Show")
+        {
+            Patterns = ["*.rchshow"],
+            MimeTypes = ["application/vnd.robocamhub.show+zip"],
+        };
+
+    private static string SanitizeFileName(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var sanitized = new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
+        return string.IsNullOrEmpty(sanitized) ? "Untitled Show" : sanitized;
     }
 }

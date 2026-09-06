@@ -13,6 +13,7 @@
     <Project Path="tests/managed/RoboCamHub.Application.Tests/RoboCamHub.Application.Tests.csproj" />
     <Project Path="tests/managed/RoboCamHub.Domain.Tests/RoboCamHub.Domain.Tests.csproj" />
     <Project Path="tests/managed/RoboCamHub.NativeInterop.Tests/RoboCamHub.NativeInterop.Tests.csproj" />
+    <Project Path="tests/managed/RoboCamHub.Persistence.Tests/RoboCamHub.Persistence.Tests.csproj" />
     <Project Path="tests/managed/RoboCamHub.Runtime.Tests/RoboCamHub.Runtime.Tests.csproj" />
   </Folder>
 </Solution>

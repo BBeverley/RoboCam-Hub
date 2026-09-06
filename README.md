@@ -45,6 +45,7 @@ Start with:
 - [`16-development-roadmap.md`](docs/16-development-roadmap.md)
 - [`27-gate-5d-multiple-views-outputs.md`](docs/27-gate-5d-multiple-views-outputs.md)
 - [`32-gate-6e-show-mode-fullscreen.md`](docs/32-gate-6e-show-mode-fullscreen.md)
+- [`33-gate-6f-rchshow-persistence-recovery.md`](docs/33-gate-6f-rchshow-persistence-recovery.md)
 
 ## Project status
 
@@ -79,6 +80,7 @@ dotnet test tests/managed/RoboCamHub.Domain.Tests/RoboCamHub.Domain.Tests.csproj
 dotnet test tests/managed/RoboCamHub.NativeInterop.Tests/RoboCamHub.NativeInterop.Tests.csproj --configuration Release --no-build --no-restore
 dotnet test tests/managed/RoboCamHub.Runtime.Tests/RoboCamHub.Runtime.Tests.csproj --configuration Release --no-build --no-restore
 dotnet test tests/managed/RoboCamHub.Application.Tests/RoboCamHub.Application.Tests.csproj --configuration Release --no-build --no-restore
+dotnet test tests/managed/RoboCamHub.Persistence.Tests/RoboCamHub.Persistence.Tests.csproj --configuration Release --no-build --no-restore
 
 dotnet run --project src/RoboCamHub.App/RoboCamHub.App.csproj --configuration Release
 ```

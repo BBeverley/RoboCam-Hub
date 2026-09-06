@@ -10,6 +10,8 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
     private readonly List<OutputDefinition> _outputs;
     private readonly Dictionary<string, Dictionary<uint, string>> _bindings = new(StringComparer.Ordinal);
 
+    public event EventHandler? DurableConfigurationChanged;
+
     public FakeWorkspaceRuntimeService(
         IEnumerable<CameraDefinition>? cameras = null,
         ViewDefinition? view = null,
@@ -89,6 +91,8 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public int StartCameraCallCount { get; private set; }
 
+    public int StartConfiguredCallCount { get; private set; }
+
     public int QueryCallCount { get; private set; }
 
     public int PreviewSwitchCount { get; private set; }
@@ -111,9 +115,23 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public ViewPreviewRuntimeStatus? PreviewStatus { get; set; }
 
+    public async Task StartConfiguredAsync(CancellationToken cancellationToken = default)
+    {
+        StartConfiguredCallCount++;
+        foreach (var camera in _cameras.Where(camera => camera.Enabled))
+        {
+            await StartCameraAsync(camera.Id, cancellationToken);
+        }
+        foreach (var output in _outputs.Where(output => output.Enabled))
+        {
+            await StartOutputAsync(output.Id, cancellationToken);
+        }
+    }
+
     public Task AddCameraAsync(CameraDefinition definition, CancellationToken cancellationToken = default)
     {
         _cameras.Add(definition);
+        DurableConfigurationChanged?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
     }
 
@@ -143,6 +161,7 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
     {
         _views.Add(definition);
         _bindings.Add(definition.Id, []);
+        DurableConfigurationChanged?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
     }
 
@@ -173,6 +192,7 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         var current = _views[index];
         _views[index] = new ViewDefinition(current.Id, current.Name, elements, assets ?? current.Assets);
         LastAppliedScene = [.. elements];
+        DurableConfigurationChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public async Task BindCameraSourceAsync(
@@ -192,6 +212,7 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         }
 
         _bindings[viewId][slotIndex] = cameraId;
+        DurableConfigurationChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public Task UnbindSourceAsync(
@@ -205,12 +226,14 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         }
 
         _bindings[viewId].Remove(slotIndex);
+        DurableConfigurationChanged?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
     }
 
     public Task AddOutputAsync(OutputDefinition definition, CancellationToken cancellationToken = default)
     {
         _outputs.Add(definition);
+        DurableConfigurationChanged?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
     }
 

@@ -111,7 +111,7 @@ public sealed class ViewTemplateFactory
     {
         ArgumentNullException.ThrowIfNull(source);
         var elements = source.SceneElements.Select(DuplicateElement).ToArray();
-        return new ViewDefinition(NewId("view"), name.Trim(), elements);
+        return new ViewDefinition(NewId("view"), name.Trim(), elements, source.Assets);
     }
 
     private static CameraElementDefinition CreateElement(
@@ -157,6 +157,24 @@ public sealed class ViewTemplateFactory
                 camera.Visible,
                 camera.Enabled,
                 camera.FitMode),
+            TextElementDefinition text => new TextElementDefinition(
+                NewId("text-element"), text.Text, text.X, text.Y, text.Width, text.Height,
+                text.ZOrder, text.FontFamily, text.FontSize, text.Alignment, text.Weight,
+                text.Style, text.TextColorRgba, text.BackgroundColorRgba, text.RotationDegrees,
+                text.FlipHorizontal, text.FlipVertical, text.Visible, text.Enabled),
+            ImageElementDefinition image => new ImageElementDefinition(
+                NewId("image-element"), image.AssetId, image.X, image.Y, image.Width,
+                image.Height, image.ZOrder, image.FitMode, image.Opacity, image.RotationDegrees,
+                image.FlipHorizontal, image.FlipVertical, image.Visible, image.Enabled),
+            ShapeElementDefinition rectangle => new ShapeElementDefinition(
+                NewId("rectangle-element"), rectangle.X, rectangle.Y, rectangle.Width,
+                rectangle.Height, rectangle.ZOrder, rectangle.FillColorRgba,
+                rectangle.OutlineColorRgba, rectangle.OutlineWidth, rectangle.Opacity,
+                rectangle.RotationDegrees, rectangle.Visible, rectangle.Enabled),
+            FrameElementDefinition frame => new FrameElementDefinition(
+                NewId("frame-element"), frame.X, frame.Y, frame.Width, frame.Height,
+                frame.ZOrder, frame.ColorRgba, frame.Thickness, frame.Opacity,
+                frame.RotationDegrees, frame.Visible, frame.Enabled),
             _ => throw new NotSupportedException(
                 $"Scene element type '{source.GetType().Name}' cannot be duplicated by Gate 6C."),
         };

@@ -21,17 +21,19 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
     private readonly record struct Interaction(
         InteractionKind Kind,
         EditorPoint StartPointer,
-        CameraElementDefinition StartDefinition,
+        ViewSceneElementDefinition StartDefinition,
         EditorElementGeometry StartGeometry,
         EditorResizeCorner ResizeCorner);
 
     private IWorkspaceRuntimeService? _runtime;
     private readonly IUiDispatcher _dispatcher;
     private readonly IReadOnlyList<CameraItemViewModel> _cameras;
+    private IReadOnlyList<AssetDefinition> _assets;
     private readonly Action<ViewDefinition> _definitionApplied;
     private IReadOnlyList<ViewSceneElementDefinition> _appliedScene;
     private ViewEditorElementViewModel? _selectedElement;
     private CameraElementPropertiesViewModel? _activeProperties;
+    private VisualElementPropertiesViewModel? _activeVisualProperties;
     private Interaction _interaction;
     private bool _isApplying;
     private string? _operatorMessage;
@@ -50,6 +52,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         _dispatcher = dispatcher;
         _definitionApplied = definitionApplied;
         _appliedScene = [.. definition.SceneElements];
+        _assets = [.. definition.Assets];
         Elements = [];
         foreach (var camera in _cameras)
         {
@@ -97,7 +100,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     public bool HasPendingTransform => _interaction.Kind != InteractionKind.None;
 
-    public bool HasPendingProperties => ActiveProperties is not null;
+    public bool HasPendingProperties => ActiveProperties is not null || ActiveVisualProperties is not null;
 
     public bool IsApplying
     {
@@ -123,6 +126,18 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         }
     }
 
+    public VisualElementPropertiesViewModel? ActiveVisualProperties
+    {
+        get => _activeVisualProperties;
+        private set
+        {
+            if (SetProperty(ref _activeVisualProperties, value))
+            {
+                RaisePropertyChanged(nameof(HasPendingProperties));
+            }
+        }
+    }
+
     public string? OperatorMessage
     {
         get => _operatorMessage;
@@ -137,6 +152,9 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     public bool HasOperatorMessage => !string.IsNullOrWhiteSpace(OperatorMessage);
 
+    public void ReportOperatorError(string action, Exception exception)
+        => OperatorMessage = OperatorError.ForAction("View scene", action, exception);
+
     public ViewEditorElementViewModel? HitTest(EditorPoint point)
     {
         if (!point.IsFinite)
@@ -145,7 +163,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         }
 
         return Elements
-            .Where(element => element.IsVisibleOnCanvas && element.Geometry.ContainsVisible(point))
+            .Where(element => element.IsVisibleOnCanvas && element.HitTest(point))
             .OrderByDescending(element => element.ZOrder)
             .ThenByDescending(element => element.Id, StringComparer.Ordinal)
             .FirstOrDefault();
@@ -227,7 +245,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         double width;
         double height;
 
-        if (preserveAspectRatio || start.FitMode == CameraElementFitMode.Contain)
+        if (preserveAspectRatio || IsContained(start))
         {
             var proposedVisibleWidth = startVisible.Width * ViewEditorGeometry.CanvasAspectRatio
                                        + horizontalSign * localDeltaX;
@@ -259,11 +277,11 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         }
 
         var sized = Copy(start, width: width, height: height);
-        var camera = FindCamera(start.CameraId);
+        var (sourceWidth, sourceHeight) = GetSourceDimensions(start);
         var sizedGeometry = ViewEditorGeometry.Calculate(
             sized,
-            camera?.LatestFrameWidth ?? 0,
-            camera?.LatestFrameHeight ?? 0);
+            sourceWidth,
+            sourceHeight);
         var opposite = OppositeCorner(_interaction.StartGeometry.VisibleCorners, _interaction.ResizeCorner);
         var visibleHalfWidth = sizedGeometry.VisibleBounds.Width * ViewEditorGeometry.CanvasAspectRatio / 2;
         var visibleHalfHeight = sizedGeometry.VisibleBounds.Height / 2;
@@ -343,17 +361,58 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
     public CameraElementPropertiesViewModel? BeginProperties()
     {
-        if (SelectedElement is null)
+        if (SelectedElement?.Definition is not CameraElementDefinition camera)
         {
             return null;
         }
 
-        ActiveProperties = new CameraElementPropertiesViewModel(GetAppliedElement(SelectedElement.Id));
+        ActiveProperties = new CameraElementPropertiesViewModel(camera);
+        ActiveVisualProperties = null;
         OperatorMessage = null;
         return ActiveProperties;
     }
 
-    public void CancelProperties() => ActiveProperties = null;
+    public VisualElementPropertiesViewModel? BeginVisualProperties()
+    {
+        if (SelectedElement?.Definition is null or CameraElementDefinition)
+        {
+            return null;
+        }
+        ActiveVisualProperties = new VisualElementPropertiesViewModel(GetAppliedElement(SelectedElement.Id));
+        ActiveProperties = null;
+        OperatorMessage = null;
+        return ActiveVisualProperties;
+    }
+
+    public void CancelProperties()
+    {
+        ActiveProperties = null;
+        ActiveVisualProperties = null;
+    }
+
+    public async Task<bool> ApplyVisualPropertiesAsync()
+    {
+        var properties = ActiveVisualProperties;
+        if (properties is null)
+        {
+            return false;
+        }
+        try
+        {
+            var replacement = properties.ToDefinition();
+            return await ApplyCandidateAsync(
+                    ReplaceElement(_appliedScene, replacement),
+                    properties.ElementId,
+                    closePropertiesOnSuccess: true)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await _dispatcher.InvokeAsync(() => OperatorMessage = OperatorError.ForAction("Element properties", "apply", exception))
+                .ConfigureAwait(false);
+            return false;
+        }
+    }
 
     public async Task<bool> ApplyPropertiesAsync()
     {
@@ -365,7 +424,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
         try
         {
-            var applied = GetAppliedElement(properties.ElementId);
+            var applied = (CameraElementDefinition)GetAppliedElement(properties.ElementId);
             var candidate = ReplaceElement(_appliedScene, properties.ToDefinition(applied));
             return await ApplyCandidateAsync(candidate, properties.ElementId, closePropertiesOnSuccess: true)
                 .ConfigureAwait(false);
@@ -386,7 +445,7 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
             return Task.FromResult(false);
         }
 
-        var nextZ = _appliedScene.OfType<CameraElementDefinition>().Select(element => element.ZOrder).DefaultIfEmpty(-1).Max();
+        var nextZ = _appliedScene.Select(element => element.ZOrder).DefaultIfEmpty(-1).Max();
         nextZ = Math.Min(1_000_000, nextZ + 1);
         var offset = Math.Min(0.16, _appliedScene.Count * 0.025);
         var element = new CameraElementDefinition(
@@ -401,6 +460,67 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         return ApplyCandidateAsync([.. _appliedScene, element], element.Id, closePropertiesOnSuccess: false);
     }
 
+    public Task<bool> AddTextAsync()
+    {
+        var element = new TextElementDefinition(
+            $"text-element-{Guid.NewGuid():N}",
+            "Title",
+            0.25,
+            0.08,
+            0.5,
+            0.14,
+            NextZOrder(),
+            fontSize: 64,
+            alignment: TextElementAlignment.Center);
+        return ApplyCandidateAsync([.. _appliedScene, element], element.Id, false);
+    }
+
+    public Task<bool> AddRectangleAsync()
+    {
+        var element = new ShapeElementDefinition(
+            $"rectangle-element-{Guid.NewGuid():N}",
+            0.25,
+            0.25,
+            0.5,
+            0.5,
+            NextZOrder(),
+            0x285078CC,
+            0xFFFFFFFF,
+            4);
+        return ApplyCandidateAsync([.. _appliedScene, element], element.Id, false);
+    }
+
+    public Task<bool> AddFrameAsync()
+    {
+        var element = new FrameElementDefinition(
+            $"frame-element-{Guid.NewGuid():N}",
+            0.2,
+            0.2,
+            0.6,
+            0.6,
+            NextZOrder(),
+            0xFFFFFFFF,
+            8);
+        return ApplyCandidateAsync([.. _appliedScene, element], element.Id, false);
+    }
+
+    public Task<bool> AddImageAsync(AssetDefinition asset)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        var assets = _assets.Any(existing => string.Equals(existing.Id, asset.Id, StringComparison.Ordinal))
+            ? _assets
+            : [.. _assets, asset];
+        var element = new ImageElementDefinition(
+            $"image-element-{Guid.NewGuid():N}",
+            asset.Id,
+            0.3,
+            0.3,
+            0.4,
+            0.4,
+            NextZOrder());
+        return ApplyCandidateAsync([.. _appliedScene, element], element.Id, false, assets);
+    }
+
     public Task<bool> DuplicateSelectedAsync()
     {
         if (SelectedElement is null)
@@ -409,12 +529,10 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         }
 
         var source = GetAppliedElement(SelectedElement.Id);
-        var nextZ = Math.Min(
-            1_000_000,
-            _appliedScene.OfType<CameraElementDefinition>().Select(element => element.ZOrder).DefaultIfEmpty(-1).Max() + 1);
+        var nextZ = NextZOrder();
         var duplicate = Copy(
             source,
-            id: $"camera-element-{Guid.NewGuid():N}",
+            id: $"{ElementIdPrefix(source)}-{Guid.NewGuid():N}",
             x: ClampCoordinate(source.X + 0.025),
             y: ClampCoordinate(source.Y + 0.025),
             zOrder: nextZ);
@@ -430,7 +548,11 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
         var selectedId = SelectedElement.Id;
         var candidate = _appliedScene.Where(element => !string.Equals(element.Id, selectedId, StringComparison.Ordinal)).ToArray();
-        return ApplyCandidateAsync(candidate, null, closePropertiesOnSuccess: true);
+        var referencedAssetIds = candidate.OfType<ImageElementDefinition>()
+            .Select(element => element.AssetId)
+            .ToHashSet(StringComparer.Ordinal);
+        var candidateAssets = _assets.Where(asset => referencedAssetIds.Contains(asset.Id)).ToArray();
+        return ApplyCandidateAsync(candidate, null, closePropertiesOnSuccess: true, candidateAssets);
     }
 
     public Task<bool> BringForwardAsync() => ReorderSelectedAsync(1);
@@ -505,7 +627,8 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
     private async Task<bool> ApplyCandidateAsync(
         IReadOnlyList<ViewSceneElementDefinition> candidate,
         string? selectedId,
-        bool closePropertiesOnSuccess)
+        bool closePropertiesOnSuccess,
+        IReadOnlyList<AssetDefinition>? candidateAssets = null)
     {
         var runtime = _runtime;
         if (runtime is null || IsApplying)
@@ -520,16 +643,19 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         }).ConfigureAwait(false);
         try
         {
-            await runtime.ApplyViewSceneAsync(ViewId, candidate).ConfigureAwait(false);
+            var assets = candidateAssets ?? _assets;
+            await runtime.ApplyViewSceneAsync(ViewId, candidate, assets).ConfigureAwait(false);
             await _dispatcher.InvokeAsync(() =>
             {
                 _appliedScene = [.. candidate];
+                _assets = [.. assets];
                 RebuildElements(selectedId);
                 if (closePropertiesOnSuccess)
                 {
                     ActiveProperties = null;
+                    ActiveVisualProperties = null;
                 }
-                _definitionApplied(new ViewDefinition(ViewId, ViewName, _appliedScene));
+                _definitionApplied(new ViewDefinition(ViewId, ViewName, _appliedScene, _assets));
             }).ConfigureAwait(false);
             return true;
         }
@@ -556,7 +682,6 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         }
 
         var ordered = _appliedScene
-            .OfType<CameraElementDefinition>()
             .OrderBy(element => element.ZOrder)
             .ThenBy(element => element.Id, StringComparer.Ordinal)
             .ToList();
@@ -569,18 +694,18 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
 
         (ordered[index], ordered[target]) = (ordered[target], ordered[index]);
         var normalized = ordered
-            .Select((element, zOrder) => (ViewSceneElementDefinition)Copy(element, zOrder: zOrder))
+            .Select((element, zOrder) => Copy(element, zOrder: zOrder))
             .ToArray();
         return ApplyCandidateAsync(normalized, SelectedElement.Id, closePropertiesOnSuccess: false);
     }
 
-    private (double X, double Y) SnapPosition(CameraElementDefinition element, double x, double y)
+    private (double X, double Y) SnapPosition(ViewSceneElementDefinition element, double x, double y)
     {
-        var camera = FindCamera(element.CameraId);
+        var (sourceWidth, sourceHeight) = GetSourceDimensions(element);
         var geometry = ViewEditorGeometry.Calculate(
             Copy(element, x: x, y: y),
-            camera?.LatestFrameWidth ?? 0,
-            camera?.LatestFrameHeight ?? 0);
+            sourceWidth,
+            sourceHeight);
         var xOffset = FindSnapOffset(AxisCoordinates(geometry.VisibleCorners, vertical: false), false, element.Id);
         var yOffset = FindSnapOffset(AxisCoordinates(geometry.VisibleCorners, vertical: true), true, element.Id);
         return (x + xOffset, y + yOffset);
@@ -636,10 +761,24 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
     private void RebuildElements(string? selectedId)
     {
         Elements.Clear();
-        foreach (var definition in _appliedScene.OfType<CameraElementDefinition>())
+        foreach (var definition in _appliedScene)
         {
-            var camera = FindCamera(definition.CameraId);
-            Elements.Add(new ViewEditorElementViewModel(definition, camera?.Name ?? definition.CameraId, camera));
+            var camera = definition is CameraElementDefinition cameraElement
+                ? FindCamera(cameraElement.CameraId)
+                : null;
+            var asset = definition is ImageElementDefinition imageElement
+                ? _assets.FirstOrDefault(candidate => string.Equals(candidate.Id, imageElement.AssetId, StringComparison.Ordinal))
+                : null;
+            var name = definition switch
+            {
+                CameraElementDefinition item => camera?.Name ?? item.CameraId,
+                TextElementDefinition item => item.Text,
+                ImageElementDefinition item => asset?.DisplayName ?? item.AssetId,
+                ShapeElementDefinition => "Rectangle",
+                FrameElementDefinition => "Frame",
+                _ => definition.Id,
+            };
+            Elements.Add(new ViewEditorElementViewModel(definition, name, camera, asset));
         }
         SelectedElement = selectedId is null
             ? null
@@ -647,14 +786,13 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         RaisePropertyChanged(nameof(Elements));
     }
 
-    private CameraElementDefinition GetAppliedElement(string elementId)
+    private ViewSceneElementDefinition GetAppliedElement(string elementId)
         => _appliedScene
-            .OfType<CameraElementDefinition>()
             .Single(element => string.Equals(element.Id, elementId, StringComparison.Ordinal));
 
     private static IReadOnlyList<ViewSceneElementDefinition> ReplaceElement(
         IReadOnlyList<ViewSceneElementDefinition> scene,
-        CameraElementDefinition replacement)
+        ViewSceneElementDefinition replacement)
         => scene
             .Select(element => string.Equals(element.Id, replacement.Id, StringComparison.Ordinal)
                 ? replacement
@@ -714,8 +852,8 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
             _ => corners[1],
         };
 
-    private static CameraElementDefinition Copy(
-        CameraElementDefinition source,
+    private static ViewSceneElementDefinition Copy(
+        ViewSceneElementDefinition source,
         string? id = null,
         double? x = null,
         double? y = null,
@@ -723,45 +861,87 @@ public sealed class ViewEditorViewModel : ObservableObject, IDisposable
         double? height = null,
         int? zOrder = null,
         double? rotationDegrees = null)
-        => new(
-            id ?? source.Id,
-            source.CameraId,
-            x ?? source.X,
-            y ?? source.Y,
-            width ?? source.Width,
-            height ?? source.Height,
-            zOrder ?? source.ZOrder,
-            source.CropLeft,
-            source.CropTop,
-            source.CropRight,
-            source.CropBottom,
-            rotationDegrees ?? source.RotationDegrees,
-            source.FlipHorizontal,
-            source.FlipVertical,
-            source.Visible,
-            source.Enabled,
-            source.FitMode);
+        => source switch
+        {
+            CameraElementDefinition camera => new CameraElementDefinition(
+                id ?? camera.Id, camera.CameraId, x ?? camera.X, y ?? camera.Y,
+                width ?? camera.Width, height ?? camera.Height, zOrder ?? camera.ZOrder,
+                camera.CropLeft, camera.CropTop, camera.CropRight, camera.CropBottom,
+                rotationDegrees ?? camera.RotationDegrees, camera.FlipHorizontal,
+                camera.FlipVertical, camera.Visible, camera.Enabled, camera.FitMode),
+            TextElementDefinition text => new TextElementDefinition(
+                id ?? text.Id, text.Text, x ?? text.X, y ?? text.Y, width ?? text.Width,
+                height ?? text.Height, zOrder ?? text.ZOrder, text.FontFamily, text.FontSize,
+                text.Alignment, text.Weight, text.Style, text.TextColorRgba, text.BackgroundColorRgba,
+                rotationDegrees ?? text.RotationDegrees, text.FlipHorizontal, text.FlipVertical,
+                text.Visible, text.Enabled),
+            ImageElementDefinition image => new ImageElementDefinition(
+                id ?? image.Id, image.AssetId, x ?? image.X, y ?? image.Y, width ?? image.Width,
+                height ?? image.Height, zOrder ?? image.ZOrder, image.FitMode, image.Opacity,
+                rotationDegrees ?? image.RotationDegrees, image.FlipHorizontal, image.FlipVertical,
+                image.Visible, image.Enabled),
+            ShapeElementDefinition rectangle => new ShapeElementDefinition(
+                id ?? rectangle.Id, x ?? rectangle.X, y ?? rectangle.Y, width ?? rectangle.Width,
+                height ?? rectangle.Height, zOrder ?? rectangle.ZOrder, rectangle.FillColorRgba,
+                rectangle.OutlineColorRgba, rectangle.OutlineWidth, rectangle.Opacity,
+                rotationDegrees ?? rectangle.RotationDegrees, rectangle.Visible, rectangle.Enabled),
+            FrameElementDefinition frame => new FrameElementDefinition(
+                id ?? frame.Id, x ?? frame.X, y ?? frame.Y, width ?? frame.Width,
+                height ?? frame.Height, zOrder ?? frame.ZOrder, frame.ColorRgba,
+                frame.Thickness, frame.Opacity, rotationDegrees ?? frame.RotationDegrees,
+                frame.Visible, frame.Enabled),
+            _ => throw new NotSupportedException($"Scene element type '{source.GetType().Name}' is unsupported."),
+        };
 
     private static bool DefinitionsEqual(
-        CameraElementDefinition left,
-        CameraElementDefinition right)
+        ViewSceneElementDefinition left,
+        ViewSceneElementDefinition right)
         => string.Equals(left.Id, right.Id, StringComparison.Ordinal)
-           && string.Equals(left.CameraId, right.CameraId, StringComparison.Ordinal)
            && left.X == right.X
            && left.Y == right.Y
            && left.Width == right.Width
            && left.Height == right.Height
            && left.ZOrder == right.ZOrder
-           && left.CropLeft == right.CropLeft
-           && left.CropTop == right.CropTop
-           && left.CropRight == right.CropRight
-           && left.CropBottom == right.CropBottom
            && left.RotationDegrees == right.RotationDegrees
            && left.FlipHorizontal == right.FlipHorizontal
            && left.FlipVertical == right.FlipVertical
            && left.Visible == right.Visible
            && left.Enabled == right.Enabled
-           && left.FitMode == right.FitMode;
+           && left.GetType() == right.GetType();
+
+    private int NextZOrder()
+        => Math.Min(1_000_000, _appliedScene.Select(element => element.ZOrder).DefaultIfEmpty(-1).Max() + 1);
+
+    private static string ElementIdPrefix(ViewSceneElementDefinition element)
+        => element switch
+        {
+            CameraElementDefinition => "camera-element",
+            TextElementDefinition => "text-element",
+            ImageElementDefinition => "image-element",
+            ShapeElementDefinition => "shape-element",
+            FrameElementDefinition => "frame-element",
+            _ => "scene-element",
+        };
+
+    private static bool IsContained(ViewSceneElementDefinition element)
+        => element switch
+        {
+            CameraElementDefinition camera => camera.FitMode == CameraElementFitMode.Contain,
+            ImageElementDefinition image => image.FitMode == CameraElementFitMode.Contain,
+            _ => false,
+        };
+
+    private (uint Width, uint Height) GetSourceDimensions(ViewSceneElementDefinition element)
+        => element switch
+        {
+            CameraElementDefinition camera => (
+                FindCamera(camera.CameraId)?.LatestFrameWidth ?? 0,
+                FindCamera(camera.CameraId)?.LatestFrameHeight ?? 0),
+            ImageElementDefinition image => (
+                _assets.FirstOrDefault(asset => string.Equals(asset.Id, image.AssetId, StringComparison.Ordinal))?.PixelWidth ?? 0,
+                _assets.FirstOrDefault(asset => string.Equals(asset.Id, image.AssetId, StringComparison.Ordinal))?.PixelHeight ?? 0),
+            _ => (0, 0),
+        };
 
     private static double ClampCoordinate(double value)
         => Math.Clamp(

@@ -24,6 +24,7 @@ public interface IWorkspaceRuntimeService : IAsyncDisposable
     Task ApplyViewSceneAsync(
         string viewId,
         IReadOnlyList<ViewSceneElementDefinition> elements,
+        IReadOnlyList<AssetDefinition>? assets = null,
         CancellationToken cancellationToken = default);
 
     Task BindCameraSourceAsync(

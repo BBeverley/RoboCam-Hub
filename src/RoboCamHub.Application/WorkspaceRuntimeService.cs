@@ -139,6 +139,7 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
     public Task ApplyViewSceneAsync(
         string viewId,
         IReadOnlyList<ViewSceneElementDefinition> elements,
+        IReadOnlyList<AssetDefinition>? assets = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(elements);
@@ -147,13 +148,13 @@ public sealed class WorkspaceRuntimeService : IWorkspaceRuntimeService
         {
             var current = _viewDefinitions.SingleOrDefault(definition => definition.Id == viewId)
                 ?? throw new KeyNotFoundException($"View '{viewId}' is not part of this workspace.");
-            updatedDefinition = new ViewDefinition(current.Id, current.Name, elements);
+            updatedDefinition = new ViewDefinition(current.Id, current.Name, elements, assets ?? current.Assets);
         }
 
         return RunAsync(
             _ =>
             {
-                GetViewRuntime(viewId).ApplyScene(updatedDefinition.SceneElements);
+                GetViewRuntime(viewId).ApplyScene(updatedDefinition.SceneElements, updatedDefinition.Assets);
                 lock (_definitionGate)
                 {
                     var index = _viewDefinitions.FindIndex(definition => definition.Id == viewId);

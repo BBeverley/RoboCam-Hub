@@ -8,6 +8,7 @@ public sealed class ViewDefinition
 
     private readonly ReadOnlyCollection<string?> _cameraIdsBySlot;
     private readonly ReadOnlyCollection<ViewSceneElementDefinition> _sceneElements;
+    private readonly ReadOnlyCollection<AssetDefinition> _assets;
 
     public ViewDefinition(
         string id,
@@ -32,13 +33,15 @@ public sealed class ViewDefinition
                 .Where(element => element is not null)
                 .Cast<ViewSceneElementDefinition>()
                 .ToArray());
+        _assets = Array.AsReadOnly(Array.Empty<AssetDefinition>());
         IsLegacyFourSlotLayout = true;
     }
 
     public ViewDefinition(
         string id,
         string name,
-        IEnumerable<ViewSceneElementDefinition> sceneElements)
+        IEnumerable<ViewSceneElementDefinition> sceneElements,
+        IEnumerable<AssetDefinition>? assets = null)
     {
         Id = DefinitionValidation.StableId(id, nameof(id), "View ID");
         Name = DefinitionValidation.Required(name, nameof(name), "View name");
@@ -66,6 +69,36 @@ public sealed class ViewDefinition
         }
 
         _sceneElements = Array.AsReadOnly(elements);
+        var assetArray = assets?.ToArray() ?? [];
+        if (assetArray.Length > 256)
+        {
+            throw new ArgumentOutOfRangeException(nameof(assets), "A View supports at most 256 imported assets.");
+        }
+        if (assetArray.Any(asset => asset is null))
+        {
+            throw new ArgumentException("Assets must not contain null values.", nameof(assets));
+        }
+
+        var duplicateAsset = assetArray
+            .GroupBy(asset => asset.Id, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateAsset is not null)
+        {
+            throw new ArgumentException($"Asset ID '{duplicateAsset.Key}' is duplicated.", nameof(assets));
+        }
+
+        var assetIds = assetArray.Select(asset => asset.Id).ToHashSet(StringComparer.Ordinal);
+        var missingAsset = elements
+            .OfType<ImageElementDefinition>()
+            .FirstOrDefault(element => !assetIds.Contains(element.AssetId));
+        if (missingAsset is not null)
+        {
+            throw new ArgumentException(
+                $"Image element '{missingAsset.Id}' references missing asset '{missingAsset.AssetId}'.",
+                nameof(sceneElements));
+        }
+
+        _assets = Array.AsReadOnly(assetArray);
         _cameraIdsBySlot = Array.AsReadOnly(new string?[SlotCount]);
         IsLegacyFourSlotLayout = false;
     }
@@ -77,6 +110,8 @@ public sealed class ViewDefinition
     public IReadOnlyList<string?> CameraIdsBySlot => _cameraIdsBySlot;
 
     public IReadOnlyList<ViewSceneElementDefinition> SceneElements => _sceneElements;
+
+    public IReadOnlyList<AssetDefinition> Assets => _assets;
 
     public bool IsLegacyFourSlotLayout { get; }
 

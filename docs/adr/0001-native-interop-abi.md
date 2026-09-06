@@ -158,6 +158,15 @@ strings are borrowed for the call only. Native code validates and resolves the
 entire candidate before atomically replacing the scene. No frame data, C++ type
 or allocator ownership crosses the boundary.
 
+Gate 6D additively extends ABI 1.10 with `rch_view_scene_element_v1` and one
+complete mixed-scene apply call. Element kinds and style values are fixed-width
+C enums/scalars; UTF-8 text, font, camera/asset identity and runtime asset-source
+pointers are borrowed for the call. Every scene-array entry has one uniform
+caller-declared `struct_size`, used as the array stride so appended fields can
+be ignored safely. Native code prepares bounded text/image resources before the
+atomic swap. The camera-only ABI remains available and no pixel buffer or
+native resource ownership crosses into managed code.
+
 ## Threading
 
 P/Invoke calls that may block on network/media work must not execute synchronously on the Avalonia UI thread.

@@ -251,6 +251,33 @@ public sealed class ViewTemplateFactoryTests
     }
 
     [Fact]
+    public void DuplicatePreservesEveryVisualSubtypeAndReusesImageAssetIdentity()
+    {
+        var asset = new AssetDefinition("asset", "logo.png", AssetMediaType.Png, "/runtime/logo.png", 400, 200);
+        var source = new ViewDefinition(
+            "source",
+            "Source",
+            [
+                new TextElementDefinition("text", "Title", 0, 0, 1, 0.1, 1),
+                new ImageElementDefinition("image", asset.Id, 0, 0.1, 0.2, 0.2, 2),
+                new ShapeElementDefinition("shape", 0, 0.3, 1, 0.1, 3, 0x12345678),
+                new FrameElementDefinition("frame", 0, 0, 1, 1, 4, 0xFFFFFFFF),
+            ],
+            [asset]);
+
+        var duplicate = _factory.Duplicate(source, "Copy");
+
+        Assert.Collection(
+            duplicate.SceneElements,
+            element => Assert.IsType<TextElementDefinition>(element),
+            element => Assert.Equal(asset.Id, Assert.IsType<ImageElementDefinition>(element).AssetId),
+            element => Assert.IsType<ShapeElementDefinition>(element),
+            element => Assert.IsType<FrameElementDefinition>(element));
+        Assert.Equal(source.Assets, duplicate.Assets);
+        Assert.Empty(source.SceneElements.Select(element => element.Id).Intersect(duplicate.SceneElements.Select(element => element.Id)));
+    }
+
+    [Fact]
     public async Task DuplicateRemainsIndependentAndDoesNotRerouteExistingOutput()
     {
         var camera = Camera("camera-1", "Spot 1");

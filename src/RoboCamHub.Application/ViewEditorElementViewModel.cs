@@ -4,21 +4,24 @@ namespace RoboCamHub.Application;
 
 public sealed class ViewEditorElementViewModel : ObservableObject
 {
-    private CameraElementDefinition _definition;
+    private ViewSceneElementDefinition _definition;
     private readonly CameraItemViewModel? _camera;
+    private readonly AssetDefinition? _asset;
     private bool _isSelected;
 
     internal ViewEditorElementViewModel(
-        CameraElementDefinition definition,
-        string cameraName,
-        CameraItemViewModel? camera = null)
+        ViewSceneElementDefinition definition,
+        string displayName,
+        CameraItemViewModel? camera = null,
+        AssetDefinition? asset = null)
     {
         _definition = definition;
         _camera = camera;
-        CameraName = cameraName;
+        _asset = asset;
+        DisplayName = displayName;
     }
 
-    public CameraElementDefinition Definition
+    public ViewSceneElementDefinition Definition
     {
         get => _definition;
         internal set
@@ -39,11 +42,23 @@ public sealed class ViewEditorElementViewModel : ObservableObject
 
     public string Id => Definition.Id;
 
-    public string CameraId => Definition.CameraId;
+    public string? CameraId => (Definition as CameraElementDefinition)?.CameraId;
 
-    public string CameraName { get; }
+    public string DisplayName { get; }
 
-    public string SelectionLabel => $"{CameraName} · {Id}";
+    public string KindLabel => Definition switch
+    {
+        CameraElementDefinition => "Camera",
+        TextElementDefinition => "Text",
+        ImageElementDefinition => "Image",
+        ShapeElementDefinition => "Rectangle",
+        FrameElementDefinition => "Frame",
+        _ => "Element",
+    };
+
+    public string SelectionLabel => $"{KindLabel}: {DisplayName} · {Id}";
+
+    public string BrushKey => CameraId ?? $"{KindLabel}:{Id}";
 
     public double X => Definition.X;
 
@@ -55,6 +70,10 @@ public sealed class ViewEditorElementViewModel : ObservableObject
 
     public double RotationDegrees => Definition.RotationDegrees;
 
+    public double CropLeft => (Definition as CameraElementDefinition)?.CropLeft ?? 0;
+
+    public double CropRight => (Definition as CameraElementDefinition)?.CropRight ?? 0;
+
     public int ZOrder => Definition.ZOrder;
 
     public bool IsVisibleOnCanvas => Definition.Visible && Definition.Enabled;
@@ -62,13 +81,33 @@ public sealed class ViewEditorElementViewModel : ObservableObject
     public EditorElementGeometry Geometry
         => ViewEditorGeometry.Calculate(
             Definition,
-            _camera?.LatestFrameWidth ?? 0,
-            _camera?.LatestFrameHeight ?? 0);
+            _camera?.LatestFrameWidth ?? _asset?.PixelWidth ?? 0,
+            _camera?.LatestFrameHeight ?? _asset?.PixelHeight ?? 0);
 
     public bool IsSelected
     {
         get => _isSelected;
         internal set => SetProperty(ref _isSelected, value);
+    }
+
+    public bool HitTest(EditorPoint point)
+    {
+        if (!Geometry.ContainsVisible(point))
+        {
+            return false;
+        }
+        if (Definition is not FrameElementDefinition frame)
+        {
+            return true;
+        }
+
+        var local = ViewEditorGeometry.InverseRotate(point, Geometry.DestinationBounds.Centre, Definition.RotationDegrees);
+        var horizontalThickness = frame.Thickness / 1920d;
+        var verticalThickness = frame.Thickness / 1080d;
+        return local.X - Definition.X <= horizontalThickness
+               || Definition.X + Definition.Width - local.X <= horizontalThickness
+               || local.Y - Definition.Y <= verticalThickness
+               || Definition.Y + Definition.Height - local.Y <= verticalThickness;
     }
 
     internal void NotifySourceGeometryChanged() => RaisePropertyChanged(nameof(Geometry));

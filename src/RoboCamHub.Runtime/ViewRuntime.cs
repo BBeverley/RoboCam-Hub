@@ -25,30 +25,23 @@ public sealed class ViewRuntime : IDisposable
 
     internal INativeRuntimeView NativeView => _nativeView;
 
-    public void ApplyScene(IReadOnlyList<ViewSceneElementDefinition> elements)
+    public void ApplyScene(
+        IReadOnlyList<ViewSceneElementDefinition> elements,
+        IReadOnlyList<AssetDefinition>? assets = null)
     {
         ThrowIfUnavailable();
         ArgumentNullException.ThrowIfNull(elements);
 
-        var updatedDefinition = new ViewDefinition(Definition.Id, Definition.Name, elements);
-
-        var nativeElements = new List<NativeCameraElementConfig>(updatedDefinition.SceneElements.Count);
-        foreach (var element in updatedDefinition.SceneElements)
-        {
-            ArgumentNullException.ThrowIfNull(element);
-            if (element is not CameraElementDefinition cameraElement)
-            {
-                throw new NotSupportedException(
-                    $"Scene element type '{element.GetType().Name}' is not supported by Gate 6A.");
-            }
-
-            _ = _owner.GetCamera(cameraElement.CameraId);
-            nativeElements.Add(ToNative(cameraElement));
-        }
+        var updatedDefinition = new ViewDefinition(
+            Definition.Id,
+            Definition.Name,
+            elements,
+            assets ?? Definition.Assets);
+        var nativeElements = ToNativeScene(updatedDefinition, _owner);
 
         RuntimeGuard.EnsureSuccess(
             $"Applying View '{Definition.Id}' scene",
-            _nativeView.ApplyCameraScene(nativeElements));
+            _nativeView.ApplyScene(nativeElements));
         Definition = updatedDefinition;
     }
 
@@ -179,4 +172,105 @@ public sealed class ViewRuntime : IDisposable
                 CameraElementFitMode.Cover => NativeCameraElementFitMode.Cover,
                 _ => throw new ArgumentOutOfRangeException(nameof(element)),
             });
+
+    internal static IReadOnlyList<NativeSceneElementConfig> ToNativeScene(
+        ViewDefinition definition,
+        ShowRuntime owner)
+    {
+        var assets = definition.Assets.ToDictionary(asset => asset.Id, StringComparer.Ordinal);
+        return definition.SceneElements.Select(element => element switch
+        {
+            CameraElementDefinition camera => Camera(camera, owner),
+            TextElementDefinition text => Text(text),
+            ImageElementDefinition image => Image(image, assets),
+            ShapeElementDefinition rectangle => Rectangle(rectangle),
+            FrameElementDefinition frame => Frame(frame),
+            _ => throw new NotSupportedException($"Scene element type '{element.GetType().Name}' is unsupported."),
+        }).ToArray();
+    }
+
+    private static NativeSceneElementConfig Common(
+        ViewSceneElementDefinition element,
+        NativeSceneElementKind kind,
+        double opacity = 1)
+        => new(
+            kind,
+            element.Id,
+            element.X,
+            element.Y,
+            element.Width,
+            element.Height,
+            element.ZOrder,
+            element.RotationDegrees,
+            element.FlipHorizontal,
+            element.FlipVertical,
+            element.Visible,
+            element.Enabled,
+            opacity);
+
+    private static NativeSceneElementConfig Camera(CameraElementDefinition element, ShowRuntime owner)
+    {
+        _ = owner.GetCamera(element.CameraId);
+        return Common(element, NativeSceneElementKind.Camera) with
+        {
+            CameraId = element.CameraId,
+            FitMode = Fit(element.FitMode),
+        };
+    }
+
+    private static NativeSceneElementConfig Text(TextElementDefinition element)
+        => Common(element, NativeSceneElementKind.Text, 1) with
+        {
+            Text = element.Text,
+            FontFamily = element.FontFamily,
+            FontSize = element.FontSize,
+            PrimaryRgba = element.TextColorRgba,
+            SecondaryRgba = element.BackgroundColorRgba ?? 0,
+            SecondaryEnabled = element.BackgroundColorRgba.HasValue,
+            Opacity = 1,
+            TextAlignment = (NativeTextAlignment)element.Alignment,
+            TextWeight = (NativeTextWeight)element.Weight,
+            TextStyle = (NativeTextStyle)element.Style,
+        };
+
+    private static NativeSceneElementConfig Image(
+        ImageElementDefinition element,
+        IReadOnlyDictionary<string, AssetDefinition> assets)
+    {
+        var asset = assets.TryGetValue(element.AssetId, out var found)
+            ? found
+            : throw new RuntimeReferenceException(
+                $"Image element '{element.Id}' references missing asset '{element.AssetId}'.");
+        return Common(element, NativeSceneElementKind.Image, element.Opacity) with
+        {
+            ImageAssetId = asset.Id,
+            ImageSource = asset.RuntimeSourceReference,
+            FitMode = Fit(element.FitMode),
+        };
+    }
+
+    private static NativeSceneElementConfig Rectangle(ShapeElementDefinition element)
+        => Common(element, NativeSceneElementKind.Rectangle, element.Opacity) with
+        {
+            PrimaryRgba = element.FillColorRgba,
+            SecondaryRgba = element.OutlineColorRgba ?? 0,
+            SecondaryEnabled = element.OutlineColorRgba.HasValue,
+            StrokeWidth = element.OutlineWidth,
+        };
+
+    private static NativeSceneElementConfig Frame(FrameElementDefinition element)
+        => Common(element, NativeSceneElementKind.Frame, element.Opacity) with
+        {
+            PrimaryRgba = element.ColorRgba,
+            StrokeWidth = element.Thickness,
+        };
+
+    private static NativeCameraElementFitMode Fit(CameraElementFitMode fitMode)
+        => fitMode switch
+        {
+            CameraElementFitMode.Stretch => NativeCameraElementFitMode.Stretch,
+            CameraElementFitMode.Contain => NativeCameraElementFitMode.Contain,
+            CameraElementFitMode.Cover => NativeCameraElementFitMode.Cover,
+            _ => throw new ArgumentOutOfRangeException(nameof(fitMode)),
+        };
 }

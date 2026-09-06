@@ -96,8 +96,10 @@ jobs:
         run: |
           dotnet --info
           cmake --version
-          pkg-config --modversion gstreamer-1.0 gstreamer-app-1.0
+          pkg-config --modversion gstreamer-1.0 gstreamer-app-1.0 pangocairo
           gst-inspect-1.0 avdec_h264
+          gst-inspect-1.0 pngdec
+          gst-inspect-1.0 jpegdec
 
       - name: Configure native CMake project
         run: cmake -S native -B native/build-ci -DBUILD_TESTING=ON

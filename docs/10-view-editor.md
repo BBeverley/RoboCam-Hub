@@ -4,6 +4,16 @@
 
 Define the View editing experience for RoboCam-Hub.
 
+## Gate 6D implementation status
+
+Gate 6D adds editable text, PNG/JPEG image, rectangle and frame elements to the
+same ordered scene and clean native View output. The Avalonia canvas remains a
+schematic editor; native preview and NDI show the authoritative composed pixels.
+See `docs/31-gate-6d-text-image-shape-frame-elements.md`.
+
+Saved template content, durable show asset packaging, undo/redo and the broader
+design features below remain future work.
+
 ## Gate 6C implementation status
 
 Gate 6C adds the first built-in template and View-duplication workflows on top
@@ -15,9 +25,8 @@ and element IDs while retaining camera references and complete transforms;
 Outputs are not copied or rerouted. See
 `docs/30-gate-6c-view-templates-layout-workflows.md`.
 
-User-authored/saved templates, drag-and-drop slot population, persistence,
-text/image/shape template content and the broader editor features below remain
-future work.
+User-authored/saved templates, drag-and-drop slot population and persistence
+remain future work.
 
 ## Gate 6B implementation status
 
@@ -27,8 +36,7 @@ rotation, keyboard nudge, duplicate/delete, Z-order controls, camera-rail Add to
 View, deterministic hit testing/snapping and an atomic properties flow. Editor
 chrome is separate from the native clean preview and NDI output. See
 `docs/29-gate-6b-interactive-view-editor.md` for the exact state/commit model and
-current limitations; text, images, shapes, templates, persistence and other
-broader features in this document remain future work.
+current limitations; Gate 6D supersedes its camera-only element limitation.
 
 The editor should feel familiar to users of OBS Studio: a free-form canvas where sources can be dragged, resized, cropped and transformed directly. The difference is that RoboCam-Hub is purpose-built around low-latency followspot camera sources and should therefore provide stronger camera-specific workflows and useful layout templates.
 

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using RoboCamHub.Application;
 using RoboCamHub.Domain;
 
@@ -103,6 +104,96 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnAddCamera(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (_workspace is null)
+        {
+            return;
+        }
+        var camera = await new CameraElementPickerWindow(_workspace.Cameras).ShowDialog<CameraItemViewModel?>(this);
+        if (camera is not null)
+        {
+            await _workspace.SelectedView.Editor.AddCameraAsync(camera.Definition.Id);
+            EditorCanvas.Focus();
+        }
+    }
+
+    private async void OnAddText(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (EditorCanvas.Editor is { } editor)
+        {
+            await editor.AddTextAsync();
+            EditorCanvas.Focus();
+        }
+    }
+
+    private async void OnAddRectangle(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (EditorCanvas.Editor is { } editor)
+        {
+            await editor.AddRectangleAsync();
+            EditorCanvas.Focus();
+        }
+    }
+
+    private async void OnAddFrame(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (EditorCanvas.Editor is { } editor)
+        {
+            await editor.AddFrameAsync();
+            EditorCanvas.Focus();
+        }
+    }
+
+    private async void OnAddImage(object? sender, RoutedEventArgs eventArgs)
+    {
+        var editor = EditorCanvas.Editor;
+        if (editor is null)
+        {
+            return;
+        }
+        try
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Import image asset",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("PNG or JPEG image")
+                    {
+                        Patterns = ["*.png", "*.jpg", "*.jpeg"],
+                        MimeTypes = ["image/png", "image/jpeg"],
+                    },
+                ],
+            });
+            var file = files.FirstOrDefault();
+            var path = file?.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+            var extension = Path.GetExtension(path);
+            var mediaType = string.Equals(extension, ".png", StringComparison.OrdinalIgnoreCase)
+                ? AssetMediaType.Png
+                : AssetMediaType.Jpeg;
+            var dimensions = ImageAssetMetadata.ReadDimensions(path, mediaType);
+            var asset = new AssetDefinition(
+                $"asset-{Guid.NewGuid():N}",
+                Path.GetFileName(path),
+                mediaType,
+                path,
+                dimensions.Width,
+                dimensions.Height);
+            await editor.AddImageAsync(asset);
+            EditorCanvas.Focus();
+        }
+        catch (Exception exception)
+        {
+            editor.ReportOperatorError("import image", exception);
+        }
+    }
+
     private async void OnCreateView(object? sender, RoutedEventArgs eventArgs)
     {
         var workspace = _workspace;
@@ -183,12 +274,19 @@ public partial class MainWindow : Window
     private void OpenProperties()
     {
         var editor = EditorCanvas.Editor;
-        if (editor?.BeginProperties() is null)
+        if (editor?.SelectedElement?.Definition is CameraElementDefinition)
+        {
+            if (editor.BeginProperties() is not null)
+            {
+                _ = new CameraElementPropertiesWindow(editor).ShowDialog(this);
+            }
+            return;
+        }
+        if (editor?.BeginVisualProperties() is null)
         {
             return;
         }
-
-        _ = new CameraElementPropertiesWindow(editor).ShowDialog(this);
+        _ = new VisualElementPropertiesWindow(editor).ShowDialog(this);
     }
 
     private void OnLocateSourceRequested(object? sender, string cameraId)

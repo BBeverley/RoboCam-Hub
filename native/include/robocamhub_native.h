@@ -23,7 +23,7 @@ extern "C" {
 #endif
 
 #define RCH_ABI_VERSION_MAJOR UINT32_C(1)
-#define RCH_ABI_VERSION_MINOR UINT32_C(9)
+#define RCH_ABI_VERSION_MINOR UINT32_C(10)
 #define RCH_ABI_VERSION ((RCH_ABI_VERSION_MAJOR << 16U) | RCH_ABI_VERSION_MINOR)
 
 #define RCH_CAMERA_CONFIG_VERSION UINT32_C(1)
@@ -53,6 +53,8 @@ extern "C" {
 #define RCH_VIEW_PREVIEW_STATUS_VERSION RCH_VIEW_PREVIEW_STATUS_VERSION_V1
 #define RCH_VIEW_CAMERA_ELEMENT_VERSION_V1 UINT32_C(1)
 #define RCH_VIEW_CAMERA_ELEMENT_VERSION RCH_VIEW_CAMERA_ELEMENT_VERSION_V1
+#define RCH_VIEW_SCENE_ELEMENT_VERSION_V1 UINT32_C(1)
+#define RCH_VIEW_SCENE_ELEMENT_VERSION RCH_VIEW_SCENE_ELEMENT_VERSION_V1
 #define RCH_VIEW_MAX_SOURCE_SLOTS UINT32_C(16)
 #define RCH_VIEW_MAX_SCENE_ELEMENTS UINT32_C(256)
 #define RCH_NO_FRAME_AGE_MS UINT64_MAX
@@ -115,6 +117,34 @@ enum rch_view_camera_fit_mode_code {
   RCH_VIEW_CAMERA_FIT_COVER = 2
 };
 
+typedef uint32_t rch_view_scene_element_kind;
+enum rch_view_scene_element_kind_code {
+  RCH_VIEW_SCENE_ELEMENT_CAMERA = 0,
+  RCH_VIEW_SCENE_ELEMENT_TEXT = 1,
+  RCH_VIEW_SCENE_ELEMENT_IMAGE = 2,
+  RCH_VIEW_SCENE_ELEMENT_RECTANGLE = 3,
+  RCH_VIEW_SCENE_ELEMENT_FRAME = 4
+};
+
+typedef uint32_t rch_view_text_alignment;
+enum rch_view_text_alignment_code {
+  RCH_VIEW_TEXT_ALIGN_LEFT = 0,
+  RCH_VIEW_TEXT_ALIGN_CENTER = 1,
+  RCH_VIEW_TEXT_ALIGN_RIGHT = 2
+};
+
+typedef uint32_t rch_view_text_weight;
+enum rch_view_text_weight_code {
+  RCH_VIEW_TEXT_WEIGHT_NORMAL = 0,
+  RCH_VIEW_TEXT_WEIGHT_BOLD = 1
+};
+
+typedef uint32_t rch_view_text_style;
+enum rch_view_text_style_code {
+  RCH_VIEW_TEXT_STYLE_NORMAL = 0,
+  RCH_VIEW_TEXT_STYLE_ITALIC = 1
+};
+
 /* One camera element in an ordered View scene. Geometry and crop are
  * normalized View/source coordinates: (0,0,1,1) fills the canvas and crop
  * values are fractions removed from the corresponding source edge. X/Y may
@@ -143,6 +173,47 @@ typedef struct rch_view_camera_element_v1 {
   uint32_t enabled;
   uint32_t reserved[4];
 } rch_view_camera_element_v1;
+
+/* One element in a complete mixed View scene. RGBA colours use the numeric
+ * representation 0xRRGGBBAA. image_asset_id_utf8 is durable identity;
+ * image_source_utf8 is borrowed runtime/import metadata used only while
+ * preparing an image resource. All strings and the array are borrowed for the
+ * duration of rch_view_apply_scene. Every array entry must use the same
+ * struct_size; the native reader uses it as the element stride so future
+ * callers may append fields safely. Fields not used by an element kind must
+ * be zero/null. Resources are prepared before the atomic scene swap. */
+typedef struct rch_view_scene_element_v1 {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  rch_view_scene_element_kind kind;
+  const char* element_id_utf8;
+  const char* camera_id_utf8;
+  const char* image_asset_id_utf8;
+  const char* image_source_utf8;
+  const char* text_utf8;
+  const char* font_family_utf8;
+  double x;
+  double y;
+  double width;
+  double height;
+  double rotation_degrees;
+  int32_t z_order;
+  rch_view_camera_fit_mode fit_mode;
+  uint32_t flip_horizontal;
+  uint32_t flip_vertical;
+  uint32_t visible;
+  uint32_t enabled;
+  double opacity;
+  uint32_t primary_rgba;
+  uint32_t secondary_rgba;
+  uint32_t secondary_enabled;
+  double stroke_width;
+  double font_size;
+  rch_view_text_alignment text_alignment;
+  rch_view_text_weight text_weight;
+  rch_view_text_style text_style;
+  uint32_t reserved[8];
+} rch_view_scene_element_v1;
 
 /* The UTF-8 strings are borrowed only for the duration of
  * rch_camera_configure. Strings are NUL-terminated, nonempty UTF-8 (ID <=255
@@ -534,6 +605,14 @@ RCH_API rch_result rch_view_unbind_source(
 RCH_API rch_result rch_view_apply_camera_scene(
   rch_view_handle view,
   const rch_view_camera_element_v1* elements,
+  uint32_t element_count) RCH_NOEXCEPT;
+
+/* Validates, prepares bounded native resources for, and atomically replaces a
+ * complete mixed camera/text/image/rectangle/frame scene. The previous scene
+ * remains active if validation or resource preparation fails. */
+RCH_API rch_result rch_view_apply_scene(
+  rch_view_handle view,
+  const rch_view_scene_element_v1* elements,
   uint32_t element_count) RCH_NOEXCEPT;
 
 /* Returns point-in-time View/source diagnostics. */

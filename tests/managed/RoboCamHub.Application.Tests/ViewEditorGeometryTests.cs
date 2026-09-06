@@ -227,7 +227,7 @@ public sealed class ViewEditorGeometryTests
         Assert.True(editor.BeginResize("element", EditorResizeCorner.BottomRight, startingHandle));
         editor.UpdateResize(new EditorPoint(0.45, 0.7), preserveAspectRatio: true, snap: false);
 
-        var pending = editor.SelectedElement!.Definition;
+        var pending = Assert.IsType<CameraElementDefinition>(editor.SelectedElement!.Definition);
         Assert.True(editor.HasPendingTransform);
         Assert.Equal(0, runtime.ApplyViewSceneCallCount);
         Assert.Equal(0.25, pending.CropLeft);

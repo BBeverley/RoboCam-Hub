@@ -186,8 +186,8 @@ NDI runtime behavior remain CI/build-only or unverified as applicable.
   explicitly deferred.
 - Only camera scene elements render. Text, images, shapes, groups and style
   effects remain future element types.
-- The Gate 5 Avalonia workspace remains a fixed-slot operational UI. Freeform
-  editor controls and persistence are not included.
+- Gate 6A itself shipped behind the fixed-slot operational UI. Gate 6B now adds
+  the freeform camera-element editor; persistence remains outside both gates.
 - Gate 6A does not add output scaling, NIC selection, discovery, audio,
   licensing or managed frame transport.
 - Manual performance evidence is a bounded functional sample, not the deferred
@@ -195,3 +195,7 @@ NDI runtime behavior remain CI/build-only or unverified as applicable.
 - The CPU arbitrary-transform renderer is materially slower than the optimized
   legacy Stretch/no-crop/no-rotation path on the validated Intel Mac; a GPU
   rewrite remains explicitly out of Gate 6A scope.
+
+Gate 6B subsequently adds the Avalonia-only interactive editor for these camera
+elements without changing ABI 1.9 or the clean preview/NDI media path. See
+`docs/29-gate-6b-interactive-view-editor.md`.

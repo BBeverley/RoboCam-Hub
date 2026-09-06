@@ -18,6 +18,12 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
         IUiDispatcher dispatcher)
     {
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
+        Editor = new ViewEditorViewModel(
+            definition,
+            cameras,
+            runtime,
+            dispatcher,
+            appliedDefinition => Definition = appliedDefinition);
         Slots = new ObservableCollection<ViewSlotViewModel>(
             Enumerable.Range(0, ViewDefinition.SlotCount)
                 .Select(slotIndex => new ViewSlotViewModel(
@@ -29,11 +35,13 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
                     dispatcher)));
     }
 
-    public ViewDefinition Definition { get; }
+    public ViewDefinition Definition { get; private set; }
 
     public string Name => Definition.Name;
 
     public ObservableCollection<ViewSlotViewModel> Slots { get; }
+
+    public ViewEditorViewModel Editor { get; }
 
     public ViewRuntimeState State
     {
@@ -126,6 +134,7 @@ public sealed class ViewWorkspaceViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        Editor.Dispose();
         foreach (var slot in Slots)
         {
             slot.Dispose();

@@ -4,6 +4,17 @@
 
 Define the View editing experience for RoboCam-Hub.
 
+## Gate 6B implementation status
+
+Gate 6B implements the first bounded camera-element subset of this design: a
+selected-View Avalonia schematic canvas with selection, move, corner resize,
+rotation, keyboard nudge, duplicate/delete, Z-order controls, camera-rail Add to
+View, deterministic hit testing/snapping and an atomic properties flow. Editor
+chrome is separate from the native clean preview and NDI output. See
+`docs/29-gate-6b-interactive-view-editor.md` for the exact state/commit model and
+current limitations; text, images, shapes, templates, persistence and other
+broader features in this document remain future work.
+
 The editor should feel familiar to users of OBS Studio: a free-form canvas where sources can be dragged, resized, cropped and transformed directly. The difference is that RoboCam-Hub is purpose-built around low-latency followspot camera sources and should therefore provide stronger camera-specific workflows and useful layout templates.
 
 ## Core editing model

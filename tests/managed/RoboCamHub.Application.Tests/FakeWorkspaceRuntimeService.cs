@@ -49,6 +49,8 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public Dictionary<string, CameraRuntimeState> CameraStates { get; } = new(StringComparer.Ordinal);
 
+    public Dictionary<string, (uint Width, uint Height)> CameraFrameSizes { get; } = new(StringComparer.Ordinal);
+
     public Dictionary<string, OutputRuntimeStatus> OutputStatuses { get; } = new(StringComparer.Ordinal);
 
     public OutputRuntimeStatus? OutputStatus
@@ -73,6 +75,8 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public Exception? SwitchPreviewException { get; set; }
 
+    public Exception? ApplyViewSceneException { get; set; }
+
     public Func<Task>? StartCameraHandler { get; set; }
 
     public Func<Task>? StartOutputHandler { get; set; }
@@ -81,11 +85,17 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
 
     public Func<Task>? BindHandler { get; set; }
 
+    public Func<string, IReadOnlyList<ViewSceneElementDefinition>, Task>? ApplyViewSceneHandler { get; set; }
+
     public int StartCameraCallCount { get; private set; }
 
     public int QueryCallCount { get; private set; }
 
     public int PreviewSwitchCount { get; private set; }
+
+    public int ApplyViewSceneCallCount { get; private set; }
+
+    public IReadOnlyList<ViewSceneElementDefinition>? LastAppliedScene { get; private set; }
 
     public Dictionary<string, int> StartOutputCallCounts { get; } = new(StringComparer.Ordinal);
 
@@ -132,11 +142,20 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         return Task.CompletedTask;
     }
 
-    public Task ApplyViewSceneAsync(
+    public async Task ApplyViewSceneAsync(
         string viewId,
         IReadOnlyList<ViewSceneElementDefinition> elements,
         CancellationToken cancellationToken = default)
     {
+        ApplyViewSceneCallCount++;
+        if (ApplyViewSceneException is not null)
+        {
+            throw ApplyViewSceneException;
+        }
+        if (ApplyViewSceneHandler is not null)
+        {
+            await ApplyViewSceneHandler(viewId, elements);
+        }
         var index = _views.FindIndex(view => view.Id == viewId);
         if (index < 0)
         {
@@ -148,7 +167,7 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         }
         var current = _views[index];
         _views[index] = new ViewDefinition(current.Id, current.Name, elements);
-        return Task.CompletedTask;
+        LastAppliedScene = [.. elements];
     }
 
     public async Task BindCameraSourceAsync(
@@ -259,8 +278,17 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         QueryCallCount++;
         var cameraStatuses = _cameras.ToDictionary(
             definition => definition.Id,
-            definition => RuntimeObservation<CameraRuntimeStatus>.Success(
-                CreateCameraStatus(CameraStates.GetValueOrDefault(definition.Id, CameraRuntimeState.Stopped))),
+            definition =>
+            {
+                var frameSize = CameraFrameSizes.GetValueOrDefault(
+                    definition.Id,
+                    (Width: 1280U, Height: 720U));
+                return RuntimeObservation<CameraRuntimeStatus>.Success(
+                    CreateCameraStatus(
+                        CameraStates.GetValueOrDefault(definition.Id, CameraRuntimeState.Stopped),
+                        frameSize.Width,
+                        frameSize.Height));
+            },
             StringComparer.Ordinal);
         var viewStatuses = new Dictionary<string, RuntimeObservation<ViewRuntimeStatus>>(StringComparer.Ordinal);
         var sourceStatuses = new Dictionary<string, IReadOnlyDictionary<uint, RuntimeObservation<ViewSourceRuntimeStatus>>>(StringComparer.Ordinal);
@@ -351,15 +379,18 @@ internal sealed class FakeWorkspaceRuntimeService : IWorkspaceRuntimeService
         }
     }
 
-    public static CameraRuntimeStatus CreateCameraStatus(CameraRuntimeState state)
+    public static CameraRuntimeStatus CreateCameraStatus(
+        CameraRuntimeState state,
+        uint latestFrameWidth = 1280,
+        uint latestFrameHeight = 720)
         => new(
             state,
             "Ok",
             state == CameraRuntimeState.Receiving ? 1U : 0U,
             state == CameraRuntimeState.Receiving ? 1U : 0U,
             state == CameraRuntimeState.Receiving,
-            1280,
-            720,
+            latestFrameWidth,
+            latestFrameHeight,
             10,
             9,
             5,

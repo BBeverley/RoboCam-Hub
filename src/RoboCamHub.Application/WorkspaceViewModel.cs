@@ -20,6 +20,7 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     private ViewWorkspaceViewModel _selectedView;
     private ViewWorkspaceViewModel? _pendingSelectedView;
     private ViewWorkspaceViewModel? _pendingOutputView;
+    private CameraItemViewModel? _locatedCamera;
     private string? _workspaceMessage;
     private int _disposed;
 
@@ -107,6 +108,12 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     public ViewPreviewViewModel Preview { get; }
 
     public ObservableCollection<OutputItemViewModel> Outputs { get; }
+
+    public CameraItemViewModel? LocatedCamera
+    {
+        get => _locatedCamera;
+        private set => SetProperty(ref _locatedCamera, value);
+    }
 
     public string NewCameraName
     {
@@ -260,6 +267,15 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
 
     public void StartStatusPolling() => _polling.Start();
 
+    public void LocateCamera(string cameraId)
+    {
+        foreach (var camera in Cameras)
+        {
+            camera.IsLocatedInEditor = string.Equals(camera.Definition.Id, cameraId, StringComparison.Ordinal);
+        }
+        LocatedCamera = Cameras.FirstOrDefault(camera => camera.IsLocatedInEditor);
+    }
+
     internal Task RefreshNowAsync(CancellationToken cancellationToken = default)
         => RefreshStatusAsync(cancellationToken);
 
@@ -388,6 +404,8 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
             {
                 if (Preview.TrySwitchView(target.Definition.Id))
                 {
+                    SelectedView.Editor.ClearSelection();
+                    target.Editor.ClearSelection();
                     SelectedView = target;
                 }
             }

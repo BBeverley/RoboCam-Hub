@@ -39,6 +39,22 @@ scanner="$gst_root/libexec/gstreamer-1.0/gst-plugin-scanner"
 cp "$scanner" "$runtime/gst-plugin-scanner"
 chmod +x "$runtime/gst-plugin-scanner"
 
+thin_arm64() {
+  local binary="$1" architectures
+  file "$binary" | grep -q 'Mach-O' || return
+  architectures="$(lipo -archs "$binary")"
+  [[ " $architectures " == *" arm64 "* ]] || {
+    echo "Packaged Mach-O file has no arm64 slice: $binary ($architectures)" >&2; exit 1;
+  }
+  if [[ "$architectures" != "arm64" ]]; then
+    lipo "$binary" -thin arm64 -output "$binary.thin"
+    mv "$binary.thin" "$binary"
+  fi
+}
+
+thin_arm64 "$macos/librobocamhub_native.dylib"
+for binary in "$runtime"/*; do thin_arm64 "$binary"; done
+
 resolve_dependency() {
   local dependency="$1" owner="$2" basename
   basename="$(basename "$dependency")"
@@ -72,9 +88,10 @@ while (( index < ${#queue[@]} )); do
     target="$runtime/$(basename "$resolved")"
     if [[ ! -f "$target" ]]; then
       cp "$resolved" "$target"
+      thin_arm64 "$target"
       queue+=("$target")
     fi
-  done < <(otool -L "$owner" | tail -n +2 | sed -E 's/^[[:space:]]+([^[:space:]]+).*/\1/')
+  done < <(otool -L "$owner" | sed -nE 's/^[[:space:]]+([^[:space:]]+).*/\1/p')
 done
 
 rewrite_binary() {
@@ -84,7 +101,7 @@ rewrite_binary() {
     [[ "$(basename "$dependency")" == "$(basename "$owner")" ]] && continue
     is_system_dependency "$dependency" && continue
     install_name_tool -change "$dependency" "$replacement_prefix/$(basename "$dependency")" "$owner"
-  done < <(otool -L "$owner" | tail -n +2 | sed -E 's/^[[:space:]]+([^[:space:]]+).*/\1/')
+  done < <(otool -L "$owner" | sed -nE 's/^[[:space:]]+([^[:space:]]+).*/\1/p')
 }
 
 rewrite_binary "$macos/librobocamhub_native.dylib" '@loader_path/gstreamer-1.0'

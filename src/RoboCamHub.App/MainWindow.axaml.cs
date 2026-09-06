@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using RoboCamHub.Application;
+using RoboCamHub.Domain;
 
 namespace RoboCamHub.App;
 
@@ -99,6 +100,38 @@ public partial class MainWindow : Window
         {
             await _workspace.SelectedView.Editor.AddCameraAsync(camera.Definition.Id);
             EditorCanvas.Focus();
+        }
+    }
+
+    private async void OnCreateView(object? sender, RoutedEventArgs eventArgs)
+    {
+        var workspace = _workspace;
+        if (workspace is null)
+        {
+            return;
+        }
+
+        var draft = ViewCreationViewModel.Create(workspace.Cameras);
+        var definition = await new ViewCreationWindow(draft).ShowDialog<ViewDefinition?>(this);
+        if (definition is not null)
+        {
+            await workspace.CreateViewAsync(definition);
+        }
+    }
+
+    private async void OnDuplicateView(object? sender, RoutedEventArgs eventArgs)
+    {
+        var workspace = _workspace;
+        if (workspace is null)
+        {
+            return;
+        }
+
+        var draft = ViewCreationViewModel.Duplicate(workspace.Cameras, workspace.SelectedView.Definition);
+        var definition = await new ViewCreationWindow(draft).ShowDialog<ViewDefinition?>(this);
+        if (definition is not null)
+        {
+            await workspace.CreateViewAsync(definition);
         }
     }
 

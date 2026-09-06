@@ -243,21 +243,27 @@
                         </Grid>
 
                         <Border Grid.Row="1" Background="#111820" CornerRadius="6" Padding="8">
-                            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
-                                <Button Grid.Column="0" Classes="compact" Content="Properties…" Click="OnProperties" />
-                                <Button Grid.Column="1" Classes="compact" Content="Duplicate" Click="OnDuplicate" />
-                                <Button Grid.Column="2" Classes="compact" Content="Delete" Click="OnDeleteElement" />
-                                <Button Grid.Column="3" Classes="compact" Content="Send Backward" Click="OnSendBackward" />
-                                <Button Grid.Column="4" Classes="compact" Content="Bring Forward" Click="OnBringForward" />
-                                <TextBlock Grid.Column="5"
+                            <Grid ColumnDefinitions="220,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
+                                <ComboBox Grid.Column="0"
+                                          ItemsSource="{Binding SelectedView.Editor.Elements}"
+                                          SelectedItem="{Binding SelectedView.Editor.SelectedElement, Mode=OneWay}"
+                                          SelectionChanged="OnEditorElementSelectionChanged"
+                                          PlaceholderText="Select scene element">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:ViewEditorElementViewModel">
+                                            <TextBlock Text="{Binding SelectionLabel}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="1" Classes="compact" Content="Properties…" Click="OnProperties" />
+                                <Button Grid.Column="2" Classes="compact" Content="Duplicate" Click="OnDuplicate" />
+                                <Button Grid.Column="3" Classes="compact" Content="Delete" Click="OnDeleteElement" />
+                                <Button Grid.Column="4" Classes="compact" Content="Send Backward" Click="OnSendBackward" />
+                                <Button Grid.Column="5" Classes="compact" Content="Bring Forward" Click="OnBringForward" />
+                                <TextBlock Grid.Column="6"
                                            VerticalAlignment="Center"
                                            Classes="secondary"
                                            Text="Drag to move · corner handles resize · Shift unlocks aspect · arrow keys nudge" />
-                                <TextBlock Grid.Column="6"
-                                           VerticalAlignment="Center"
-                                           Foreground="#67B7FF"
-                                           FontWeight="SemiBold"
-                                           Text="{Binding SelectedView.Editor.SelectedElement.CameraName, FallbackValue='No selection'}" />
                             </Grid>
                         </Border>
 

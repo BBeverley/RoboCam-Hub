@@ -91,7 +91,10 @@ negotiated source dimensions
   destination/visible centre, exactly as in the native compositor.
 - Elements may extend beyond the output canvas. Their scene-space geometry is
   retained, while schematic fill, selection chrome and hit testing are clipped
-  to the same 16:9 canvas boundary as clean output.
+  to the same 16:9 canvas boundary as clean output. The scene-element selector
+  in the editor toolbar is a non-spatial recovery path for elements positioned
+  completely outside the canvas; selecting one there exposes its Properties,
+  Delete and keyboard-nudge actions without changing Gate 6A coordinate rules.
 
 ## Editing behavior
 

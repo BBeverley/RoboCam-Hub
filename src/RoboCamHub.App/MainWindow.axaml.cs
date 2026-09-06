@@ -102,6 +102,15 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnEditorElementSelectionChanged(object? sender, SelectionChangedEventArgs eventArgs)
+    {
+        if (sender is ComboBox { SelectedItem: ViewEditorElementViewModel element }
+            && EditorCanvas.Editor is { } editor)
+        {
+            editor.SelectElement(element.Id);
+        }
+    }
+
     private async void OnDuplicate(object? sender, RoutedEventArgs eventArgs)
     {
         if (EditorCanvas.Editor is { } editor)

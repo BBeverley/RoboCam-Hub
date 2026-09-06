@@ -43,6 +43,8 @@ public sealed class ViewEditorElementViewModel : ObservableObject
 
     public string CameraName { get; }
 
+    public string SelectionLabel => $"{CameraName} · {Id}";
+
     public double X => Definition.X;
 
     public double Y => Definition.Y;

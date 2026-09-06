@@ -57,6 +57,22 @@ public sealed class ViewEditorViewModelTests
     }
 
     [Fact]
+    public async Task NonSpatialSelectionKeepsFullyOffCanvasElementRecoverable()
+    {
+        var (workspace, _) = CreateWorkspace(
+            Element("off-canvas", "camera-1", x: 2, y: 2, width: 0.2, height: 0.2));
+        await using (workspace)
+        {
+            var editor = workspace.SelectedView.Editor;
+
+            Assert.Null(editor.HitTest(new EditorPoint(0.5, 0.5)));
+            Assert.True(editor.SelectElement("off-canvas"));
+            Assert.Equal("off-canvas", editor.SelectedElement?.Id);
+            Assert.Contains("off-canvas", editor.SelectedElement?.SelectionLabel, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task DragIsLocalUntilReleaseAndSuccessfulCommitUpdatesAppliedScene()
     {
         var (workspace, runtime) = CreateWorkspace(Element("element", "camera-1", x: 0.1, y: 0.2));

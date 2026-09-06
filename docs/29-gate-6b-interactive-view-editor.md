@@ -205,3 +205,7 @@ correction: ABI 1.9 and native crop/fit/compositor code were unchanged.
 - Canvas resolution remains the Gate 6A fixed 1920×1080 output.
 - Manual performance evidence is platform-specific and does not replace the
   deferred long profiling soak.
+
+Gate 6C subsequently adds managed built-in template instantiation and complete
+View duplication without changing Gate 6B editor state or native ABI 1.9. See
+`docs/30-gate-6c-view-templates-layout-workflows.md`.

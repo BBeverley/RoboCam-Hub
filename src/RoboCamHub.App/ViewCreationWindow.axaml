@@ -1,0 +1,92 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:RoboCamHub.Application;assembly=RoboCamHub.Application"
+        x:Class="RoboCamHub.App.ViewCreationWindow"
+        x:DataType="vm:ViewCreationViewModel"
+        Width="560"
+        Height="650"
+        MinWidth="500"
+        MinHeight="420"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        Title="{Binding Title}">
+    <Grid Margin="22" RowDefinitions="Auto,Auto,Auto,*,Auto,Auto" RowSpacing="14">
+        <StackPanel Grid.Row="0" Spacing="4">
+            <TextBlock FontSize="22" FontWeight="SemiBold" Text="{Binding Title}" />
+            <TextBlock Foreground="#AAB7C4"
+                       IsVisible="{Binding IsTemplateCreation}"
+                       TextWrapping="Wrap"
+                       Text="Choose a starting point, assign any cameras that are ready, then edit the result freely." />
+            <TextBlock Foreground="#AAB7C4"
+                       IsVisible="{Binding IsDuplicate}"
+                       TextWrapping="Wrap"
+                       Text="{Binding DuplicateDescription}" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Spacing="5">
+            <TextBlock FontWeight="SemiBold" Text="View name" />
+            <TextBox Text="{Binding ViewName, Mode=TwoWay}" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="2" Spacing="5" IsVisible="{Binding IsTemplateCreation}">
+            <TextBlock FontWeight="SemiBold" Text="Starting layout" />
+            <ComboBox ItemsSource="{Binding TemplateChoices}"
+                      SelectedItem="{Binding SelectedTemplateChoice, Mode=TwoWay}">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ViewTemplateChoiceViewModel">
+                        <TextBlock Text="{Binding DisplayName}" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+        </StackPanel>
+
+        <Border Grid.Row="3"
+                Padding="12"
+                Background="#111820"
+                BorderBrush="#334453"
+                BorderThickness="1"
+                CornerRadius="6"
+                IsVisible="{Binding HasSlotAssignments}">
+            <Grid RowDefinitions="Auto,*" RowSpacing="8">
+                <TextBlock FontWeight="SemiBold" Text="Camera assignments (optional)" />
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding SlotAssignments}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ViewTemplateSlotAssignmentViewModel">
+                                <Grid ColumnDefinitions="150,*,Auto" ColumnSpacing="10" Margin="0,4">
+                                    <TextBlock VerticalAlignment="Center" Text="{Binding DisplayLabel}" />
+                                    <ComboBox Grid.Column="1"
+                                              ItemsSource="{Binding AvailableCameras}"
+                                              SelectedItem="{Binding SelectedCamera, Mode=TwoWay}"
+                                              PlaceholderText="Leave empty">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:CameraItemViewModel">
+                                                <TextBlock Text="{Binding Name}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                    <Button Grid.Column="2" Content="Clear" Click="OnClearAssignment" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <TextBlock Grid.Row="4"
+                   Foreground="#F6A0A0"
+                   IsVisible="{Binding HasOperatorMessage}"
+                   TextWrapping="Wrap"
+                   Text="{Binding OperatorMessage}" />
+
+        <StackPanel Grid.Row="5" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="10">
+            <Button MinWidth="90" Content="Cancel" Click="OnCancel" />
+            <Button MinWidth="100"
+                    IsDefault="True"
+                    IsEnabled="{Binding CanSubmit}"
+                    Content="{Binding SubmitLabel}"
+                    Click="OnSubmit" />
+        </StackPanel>
+    </Grid>
+</Window>

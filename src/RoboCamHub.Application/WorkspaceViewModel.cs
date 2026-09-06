@@ -279,6 +279,53 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
     internal Task RefreshNowAsync(CancellationToken cancellationToken = default)
         => RefreshStatusAsync(cancellationToken);
 
+    public async Task<bool> CreateViewAsync(
+        ViewDefinition definition,
+        bool selectAfterCreation = true)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        var runtime = _runtime;
+        if (runtime is null || IsAddingView)
+        {
+            return false;
+        }
+
+        await _dispatcher.InvokeAsync(() =>
+        {
+            IsAddingView = true;
+            WorkspaceMessage = null;
+        }).ConfigureAwait(false);
+        try
+        {
+            await runtime.AddViewAsync(definition).ConfigureAwait(false);
+            await _dispatcher.InvokeAsync(() =>
+            {
+                var view = new ViewWorkspaceViewModel(definition, Cameras, runtime, _dispatcher);
+                Views.Add(view);
+                PendingSelectedView = view;
+                PendingOutputView ??= view;
+                if (selectAfterCreation && Preview.TrySwitchView(view.Definition.Id))
+                {
+                    SelectedView.Editor.ClearSelection();
+                    view.Editor.ClearSelection();
+                    SelectedView = view;
+                }
+            }).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await _dispatcher.InvokeAsync(
+                () => WorkspaceMessage = OperatorError.ForAction("View", "creation", exception))
+                .ConfigureAwait(false);
+            return false;
+        }
+        finally
+        {
+            await _dispatcher.InvokeAsync(() => IsAddingView = false).ConfigureAwait(false);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -351,41 +398,24 @@ public sealed class WorkspaceViewModel : ObservableObject, IAsyncDisposable
 
     private async Task AddViewAsync()
     {
-        var runtime = _runtime;
-        if (runtime is null || IsAddingView)
+        if (_runtime is null || IsAddingView)
         {
             return;
         }
 
-        await _dispatcher.InvokeAsync(() =>
-        {
-            IsAddingView = true;
-            WorkspaceMessage = null;
-        }).ConfigureAwait(false);
         try
         {
-            var definition = new ViewDefinition(
-                $"view-{Guid.NewGuid():N}",
-                NewViewName.Trim());
-            await runtime.AddViewAsync(definition).ConfigureAwait(false);
-            await _dispatcher.InvokeAsync(() =>
+            var definition = new ViewTemplateFactory().CreateBlank(NewViewName);
+            if (await CreateViewAsync(definition, selectAfterCreation: false).ConfigureAwait(false))
             {
-                var view = new ViewWorkspaceViewModel(definition, Cameras, runtime, _dispatcher);
-                Views.Add(view);
-                PendingSelectedView = view;
-                PendingOutputView ??= view;
-                NewViewName = string.Empty;
-            }).ConfigureAwait(false);
+                await _dispatcher.InvokeAsync(() => NewViewName = string.Empty).ConfigureAwait(false);
+            }
         }
         catch (Exception exception)
         {
             await _dispatcher.InvokeAsync(
                 () => WorkspaceMessage = OperatorError.ForAction("View", "creation", exception))
                 .ConfigureAwait(false);
-        }
-        finally
-        {
-            await _dispatcher.InvokeAsync(() => IsAddingView = false).ConfigureAwait(false);
         }
     }
 

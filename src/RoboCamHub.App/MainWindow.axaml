@@ -105,7 +105,7 @@
                 <Grid ColumnDefinitions="*,Auto">
                     <StackPanel VerticalAlignment="Center" Spacing="2">
                         <TextBlock FontSize="22" FontWeight="SemiBold" Text="{Binding ApplicationTitle}" />
-                        <TextBlock Classes="secondary" Text="Interactive freeform View editor · Gate 6B" />
+                        <TextBlock Classes="secondary" Text="View templates and interactive freeform editor · Gate 6C" />
                     </StackPanel>
                     <Border Grid.Column="1"
                             VerticalAlignment="Center"
@@ -217,7 +217,7 @@
                                     <TextBlock HorizontalAlignment="Right" Classes="secondary" Text="{Binding Preview.PresentationFpsText}" />
                                 </StackPanel>
                             </Grid>
-                            <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+                            <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="8">
                                 <ComboBox Grid.Column="0"
                                           Width="220"
                                           ItemsSource="{Binding Views}"
@@ -232,13 +232,14 @@
                                         Classes="compact"
                                         Command="{Binding SelectViewCommand}"
                                         Content="Show View" />
-                                <TextBox Grid.Column="2"
-                                         PlaceholderText="New View name"
-                                         Text="{Binding NewViewName, Mode=TwoWay}" />
                                 <Button Grid.Column="3"
                                         Classes="compact"
-                                        Command="{Binding AddViewCommand}"
-                                        Content="Add View" />
+                                        Click="OnCreateView"
+                                        Content="Add View…" />
+                                <Button Grid.Column="4"
+                                        Classes="compact"
+                                        Click="OnDuplicateView"
+                                        Content="Duplicate View…" />
                             </Grid>
                         </Grid>
 

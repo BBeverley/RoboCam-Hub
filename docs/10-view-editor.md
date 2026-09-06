@@ -4,6 +4,21 @@
 
 Define the View editing experience for RoboCam-Hub.
 
+## Gate 6C implementation status
+
+Gate 6C adds the first built-in template and View-duplication workflows on top
+of Gate 6B. A compact modal creates Blank, common grid and picture-in-picture
+Views, with optional logical-camera assignments for each portable slot.
+Templates instantiate ordinary camera scene elements and leave no locked layout
+type in the View or native compositor. Duplicating a View regenerates its View
+and element IDs while retaining camera references and complete transforms;
+Outputs are not copied or rerouted. See
+`docs/30-gate-6c-view-templates-layout-workflows.md`.
+
+User-authored/saved templates, drag-and-drop slot population, persistence,
+text/image/shape template content and the broader editor features below remain
+future work.
+
 ## Gate 6B implementation status
 
 Gate 6B implements the first bounded camera-element subset of this design: a
